@@ -428,6 +428,26 @@ A případně později i další knowledge items mimo angličtinu.
 
 Ale **nenavrhovat nyní obecný knowledge-management systém**. Angličtina je první a hlavní use case.
 
+## Plánované features
+
+### Osvěžování naučených slovíček
+
+Slovíčka ve stavu `mastered` se po delší době znovu zařadí do výuky, aby se osvěžila.
+
+Dnešní chování: `applyReview()` po šesti úspěších nastaví `mastered` a interval dál roste
+exponenciálně, takže slovo prakticky vypadne z oběhu.
+
+K rozhodnutí: strop na interval (např. max 180 dní), nebo občasná náhodná refresh otázka
+mimo `next_review`.
+
+### Opačný směr překladu
+
+Procvičovat i CS→EN, nejen EN→CS.
+
+`reviews.csv` už sloupec `direction` má, ale zapisuje se do něj natvrdo `EN->CS`.
+Bude potřeba směr vybírat (náhodně, nebo podle toho, který je slabší), předat ho
+do `generateQuestion()` a do vyhodnocení.
+
 ---
 
 # Preferovaný způsob další práce

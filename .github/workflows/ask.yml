@@ -1,13 +1,14 @@
-name: Telegram Inbound Message
+name: Ask a question
 
 on:
-  repository_dispatch:
-    types: [telegram-message]
+  schedule:
+    - cron: "0 6,11,17 * * *"
+  workflow_dispatch:
 
 concurrency: flashc-data
 
 jobs:
-  handle-message:
+  ask:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -19,12 +20,11 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - run: npx tsx src/reply.ts
+      - run: npx tsx src/ask.ts
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MESSAGE_TEXT: ${{ github.event.client_payload.text }}
 
       - name: Commit data changes
         run: |
@@ -35,6 +35,5 @@ jobs:
           git config user.name "flashc-bot"
           git config user.email "noreply@github.com"
           git add data
-          git commit -m "Reply: update learning state"
-          git pull --rebase
+          git commit -m "Ask: new session"
           git push

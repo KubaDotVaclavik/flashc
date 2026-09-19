@@ -1,0 +1,4 @@
+id,word,meaning,example,state,next_review,interval,ease,successes,failures,tags,notes
+1,reluctant,neochotný,I was reluctant to accept the offer.,new,,0,2.5,0,0,general,
+2,subtle,jemný; nepatrný,There is a subtle difference.,new,,0,2.5,0,0,general,
+3,cumbersome,těžkopádný,The process is cumbersome.,new,,0,2.5,0,0,work,

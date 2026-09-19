@@ -1,0 +1,19 @@
+{
+  "name": "flashc",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.127.0",
+    "csv-parse": "^7.0.2",
+    "csv-stringify": "^6.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.23.13",
+    "typescript": "^5.7.2"
+  }
+}
