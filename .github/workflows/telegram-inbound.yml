@@ -1,0 +1,25 @@
+name: Telegram Inbound Message (POC)
+
+on:
+  repository_dispatch:
+    types: [telegram-message]
+
+jobs:
+  handle-message:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show received payload
+        run: |
+          echo "chat_id: ${{ github.event.client_payload.chat_id }}"
+          echo "text: ${{ github.event.client_payload.text }}"
+
+      - name: Echo reply back to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
+          RECEIVED_TEXT: ${{ github.event.client_payload.text }}
+        run: |
+          curl -sS -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" \
+            --data-urlencode text="🤖 Received: ${RECEIVED_TEXT}"

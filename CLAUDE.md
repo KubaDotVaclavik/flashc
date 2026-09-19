@@ -446,4 +446,3 @@ Nejdříve navrhnout konkrétní MVP:
 Potom implementovat postupně.
 
 Při návrhu preferovat **nejjednodušší řešení, které splní požadavky**, nikoli enterprise architecture.
-

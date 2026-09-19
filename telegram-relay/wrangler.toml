@@ -1,0 +1,9 @@
+name = "flashc-telegram-relay"
+main = "src/index.js"
+compatibility_date = "2024-09-19"
+
+# Secrets (set via `wrangler secret put`, not stored here):
+#   TELEGRAM_BOT_TOKEN   - Telegram bot token (used to verify webhook path + could be reused for replies)
+#   TELEGRAM_WEBHOOK_SECRET - random string, checked against Telegram's secret token header
+#   GITHUB_TOKEN         - GitHub fine-grained PAT with Contents: Read/write on the flashc repo
+#   GITHUB_REPO          - e.g. "KubaDotVaclavik/flashc"
