@@ -10,6 +10,19 @@ id = "eb4f761a3500433e86645c4f93cc08ca"
 [triggers]
 crons = ["0 6,11,17 * * *"]
 
+# Level steps, penalties and band boundaries are constants in the code — they
+# depend on each other and are not meant to be tuned independently.
+[vars]
+START_LEVEL = "2"        # level a new word starts at (0-2)
+WORDS_PER_SESSION = "1"  # questions asked per session
+LEARNING_POOL = "10"     # weakest learning candidates entering the draw
+REVIEW_POOL = "5"        # due known/mastered candidates entering the draw
+COOLDOWN_6 = "5"         # days a level 6 word rests
+COOLDOWN_7 = "12"
+COOLDOWN_8 = "25"
+LEARNING_WARN = "40"     # warn above this many words in Learning
+REVIEW_WARN = "60"       # warn above this many in Known+Mastered
+
 # Secrets (set via `wrangler secret put`, not stored here):
 #   TELEGRAM_BOT_TOKEN      - Telegram bot token, used to send messages
 #   TELEGRAM_CHAT_ID        - the chat the bot talks to

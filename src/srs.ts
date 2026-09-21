@@ -1,49 +1,33 @@
-import type { Word, ReviewResult, WordState } from "./types.js";
+import type { Word, Direction, ReviewResult } from "./types.js";
 
-const MIN_EASE = 1.3;
+export const MAX_LEVEL = 8;
 
-function addDays(days: number): string {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
+/**
+ * How far a wrong answer knocks a word back. Learning (0-5) costs exactly one
+ * correct answer to repair; the higher bands cost more, so a word forgotten
+ * after weeks of silence drops back into daily practice rather than being
+ * re-confirmed by a single lucky answer.
+ */
+function penalty(level: number): number {
+  if (level >= MAX_LEVEL) return 3;
+  if (level >= 6) return 2;
+  return 1;
 }
 
-function nextState(successes: number): WordState {
-  if (successes >= 6) return "mastered";
-  if (successes >= 3) return "familiar";
-  return "learning";
-}
+export function applyLevel(
+  word: Word,
+  direction: Direction,
+  result: ReviewResult,
+  today: string
+): Word {
+  const level = direction === "en_cs" ? word.level_en_cs : word.level_cs_en;
 
-export function applyReview(word: Word, result: ReviewResult): Word {
-  if (result === "bad") {
-    return {
-      ...word,
-      state: "learning",
-      interval: 1,
-      ease: Math.max(MIN_EASE, word.ease - 0.2),
-      failures: word.failures + 1,
-      next_review: addDays(1),
-    };
-  }
+  const next =
+    result === "good"
+      ? Math.min(MAX_LEVEL, level + 1)
+      : Math.max(0, level - penalty(level));
 
-  const successes = word.successes + 1;
-  const interval = word.interval < 1 ? 1 : Math.round(word.interval * word.ease);
-
-  return {
-    ...word,
-    state: nextState(successes),
-    interval,
-    ease: word.ease + 0.1,
-    successes,
-    next_review: addDays(interval),
-  };
-}
-
-export function dueWords(words: Word[], today = new Date()): Word[] {
-  const todayStr = today.toISOString().slice(0, 10);
-  return words.filter(
-    (word) =>
-      word.state !== "suspended" &&
-      (word.next_review === "" || word.next_review <= todayStr)
-  );
+  return direction === "en_cs"
+    ? { ...word, level_en_cs: next, practiced_en_cs: today }
+    : { ...word, level_cs_en: next, practiced_cs_en: today };
 }

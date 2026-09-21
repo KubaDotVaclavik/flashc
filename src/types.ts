@@ -1,28 +1,15 @@
-export type WordState = "new" | "learning" | "familiar" | "mastered" | "suspended";
+export type Direction = "en_cs" | "cs_en";
+
+export type ReviewResult = "good" | "bad";
 
 export type Word = {
   id: string;
   word: string;
   meaning: string;
   example: string;
-  state: WordState;
-  next_review: string;
-  interval: number;
-  ease: number;
-  successes: number;
-  failures: number;
+  level_en_cs: number;
+  level_cs_en: number;
+  practiced_en_cs: string;
+  practiced_cs_en: string;
   tags: string;
-  notes: string;
-};
-
-export type ReviewResult = "good" | "bad";
-
-export type Review = {
-  timestamp: string;
-  word_id: string;
-  type: string;
-  direction: string;
-  result: ReviewResult;
-  score: number;
-  notes: string;
 };

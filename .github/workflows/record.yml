@@ -24,11 +24,11 @@ jobs:
           EVENT_TYPE: ${{ github.event.action }}
           WORD_ID: ${{ github.event.client_payload.word_id }}
           RESULT: ${{ github.event.client_payload.result }}
-          SCORE: ${{ github.event.client_payload.score }}
-          ANSWER: ${{ github.event.client_payload.answer }}
+          DIRECTION: ${{ github.event.client_payload.direction }}
           WORD: ${{ github.event.client_payload.word }}
           MEANING: ${{ github.event.client_payload.meaning }}
           EXAMPLE: ${{ github.event.client_payload.example }}
+          START_LEVEL: ${{ github.event.client_payload.start_level }}
 
       - name: Commit data changes
         run: |

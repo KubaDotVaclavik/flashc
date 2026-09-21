@@ -1,27 +1,44 @@
 import { parseCsv } from "./csv.js";
 
 const ACTIVE_SESSION_KEY = "active_session";
+const IDLE_NOTICE_KEY = "idle_notice_day";
+
+const MAX_LEVEL = 8;
+const LEARNING_MAX = 5;
+
+type Direction = "en_cs" | "cs_en";
 
 /** Only the columns of words.csv this Worker reads; the repo owns the full row. */
 type Word = {
   id: string;
   word: string;
   meaning: string;
-  state: string;
-  next_review: string;
+  example: string;
+  level_en_cs: number;
+  level_cs_en: number;
+  practiced_en_cs: string;
+  practiced_cs_en: string;
+};
+
+type Candidate = {
+  word: Word;
+  direction: Direction;
+  level: number;
+  practiced: string;
 };
 
 type AnswerPayload = {
   word_id: string;
   answer: string;
   result: "good" | "bad";
-  score: number;
+  direction: Direction;
 };
 
 type AddPayload = {
   word: string;
   meaning: string;
   example: string;
+  start_level: number;
 };
 
 type Env = {
@@ -32,13 +49,28 @@ type Env = {
   GITHUB_TOKEN: string;
   GITHUB_REPO: string;
   ANTHROPIC_API_KEY?: string;
+  START_LEVEL?: string;
+  WORDS_PER_SESSION?: string;
+  LEARNING_POOL?: string;
+  REVIEW_POOL?: string;
+  COOLDOWN_6?: string;
+  COOLDOWN_7?: string;
+  COOLDOWN_8?: string;
+  LEARNING_WARN?: string;
+  REVIEW_WARN?: string;
 };
 
-type ActiveSession = {
+type Question = {
   word_id: string;
   word: string;
   meaning: string;
+  direction: Direction;
   question: string;
+};
+
+type ActiveSession = {
+  questions: Question[];
+  current: number;
 };
 
 type Evaluation = {
@@ -51,6 +83,12 @@ type WordDetails = {
   meaning: string;
   example: string;
 };
+
+function config(env: Env, name: keyof Env, fallback: number): number {
+  const raw = env[name];
+  const value = Number(raw);
+  return raw !== undefined && Number.isFinite(value) ? value : fallback;
+}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -113,42 +151,53 @@ async function startSession(announceIdle: boolean, env: Env): Promise<void> {
   const active = await env.SESSIONS.get<ActiveSession>(ACTIVE_SESSION_KEY, "json");
   if (active) {
     if (announceIdle) {
-      await sendMessage(`You still have an open question:\n\n${active.question}`, env);
+      const open = active.questions[active.current];
+      if (open) {
+        await sendMessage(`You still have an open question:\n\n${open.question}`, env);
+      }
     }
     return;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
-  const due = (await readWords(env)).filter(
-    (word) =>
-      word.state !== "suspended" &&
-      (!word.next_review || word.next_review <= today)
-  );
-
-  const word = due[Math.floor(Math.random() * due.length)];
-  if (!word) {
-    if (announceIdle) {
-      await sendMessage("Nothing to practise right now. Add a word with /add <word>.", env);
+  const candidates = selectCandidates(await readWords(env), env);
+  if (candidates.length === 0) {
+    // On a schedule this would repeat at every cron tick, so the reminder is
+    // capped at one a day. Asking directly always gets an answer.
+    const today = new Date().toISOString().slice(0, 10);
+    if (!announceIdle && (await env.SESSIONS.get(IDLE_NOTICE_KEY)) === today) {
+      return;
     }
+    await env.SESSIONS.put(IDLE_NOTICE_KEY, today);
+    await sendMessage(
+      "Nothing to practise right now — everything you know is still resting. Add a word with /add <word>.",
+      env
+    );
     return;
   }
 
-  const question = await askQuestion(word, env);
+  const questions: Question[] = [];
+  for (const candidate of candidates) {
+    questions.push({
+      word_id: candidate.word.id,
+      word: candidate.word.word,
+      meaning: candidate.word.meaning,
+      direction: candidate.direction,
+      question: await askQuestion(candidate.word, candidate.direction, env),
+    });
+  }
 
-  const session: ActiveSession = {
-    word_id: word.id,
-    word: word.word,
-    meaning: word.meaning,
-    question,
-  };
+  const session: ActiveSession = { questions, current: 0 };
   await env.SESSIONS.put(ACTIVE_SESSION_KEY, JSON.stringify(session));
 
-  await sendMessage(question, env);
+  const first = questions[0]!;
+  const prefix = questions.length > 1 ? `(1/${questions.length}) ` : "";
+  await sendMessage(prefix + first.question, env);
 }
 
 async function gradeAnswer(answer: string, env: Env): Promise<void> {
   const session = await env.SESSIONS.get<ActiveSession>(ACTIVE_SESSION_KEY, "json");
-  if (!session) {
+  const open = session?.questions[session.current];
+  if (!session || !open) {
     await sendMessage(
       "No practice session is running. Start one with /session, or add a word with /add <word>.",
       env
@@ -156,21 +205,45 @@ async function gradeAnswer(answer: string, env: Env): Promise<void> {
     return;
   }
 
-  const evaluation = await evaluateAnswer(session, answer, env);
+  const evaluation = await evaluateAnswer(open, answer, env);
 
-  // Record the result before clearing the session: if the dispatch fails, the
-  // session stays open and the answer can be retried rather than silently lost.
+  // Record the result before advancing the session: if the dispatch fails, the
+  // question stays open and the answer can be retried rather than silently lost.
   const payload: AnswerPayload = {
-    word_id: session.word_id,
+    word_id: open.word_id,
     answer,
     result: evaluation.result,
-    score: evaluation.score,
+    direction: open.direction,
   };
   await dispatch("flashc-answer", payload, env);
-  await env.SESSIONS.delete(ACTIVE_SESSION_KEY);
+
+  const next = session.current + 1;
+  const done = next >= session.questions.length;
+
+  if (done) {
+    await env.SESSIONS.delete(ACTIVE_SESSION_KEY);
+  } else {
+    await env.SESSIONS.put(
+      ACTIVE_SESSION_KEY,
+      JSON.stringify({ ...session, current: next })
+    );
+  }
 
   const mark = evaluation.result === "good" ? "✅" : "❌";
   await sendMessage(`${mark} ${evaluation.feedback}`, env);
+
+  if (done) {
+    // words.csv still lacks this session's answers — the Action commits them a
+    // few seconds from now — so the report is one session behind. Close enough
+    // for a nudge about the size of each band.
+    await sendMessage(buildReport(await readWords(env), env), env);
+  } else {
+    const upcoming = session.questions[next]!;
+    await sendMessage(
+      `(${next + 1}/${session.questions.length}) ${upcoming.question}`,
+      env
+    );
+  }
 }
 
 async function addWord(word: string, env: Env): Promise<void> {
@@ -186,9 +259,113 @@ async function addWord(word: string, env: Env): Promise<void> {
   }
 
   const details = await lookupWord(word, env);
-  const payload: AddPayload = { word, meaning: details.meaning, example: details.example };
+  const payload: AddPayload = {
+    word,
+    meaning: details.meaning,
+    example: details.example,
+    start_level: config(env, "START_LEVEL", 2),
+  };
   await dispatch("flashc-add", payload, env);
   await sendMessage(`➕ ${word} — ${details.meaning}\n\n${details.example}`, env);
+}
+
+function levelOf(word: Word, direction: Direction): number {
+  return direction === "en_cs" ? word.level_en_cs : word.level_cs_en;
+}
+
+function practicedOf(word: Word, direction: Direction): string {
+  return direction === "en_cs" ? word.practiced_en_cs : word.practiced_cs_en;
+}
+
+function daysSince(date: string): number {
+  if (!date) return Number.POSITIVE_INFINITY;
+  const then = Date.parse(`${date}T00:00:00Z`);
+  if (Number.isNaN(then)) return Number.POSITIVE_INFINITY;
+  return (Date.now() - then) / 86_400_000;
+}
+
+function cooldownFor(level: number, env: Env): number {
+  if (level >= MAX_LEVEL) return config(env, "COOLDOWN_8", 25);
+  if (level >= 7) return config(env, "COOLDOWN_7", 12);
+  return config(env, "COOLDOWN_6", 5);
+}
+
+export function selectCandidates(words: Word[], env: Env): Candidate[] {
+  const all: Candidate[] = [];
+  for (const word of words) {
+    for (const direction of ["en_cs", "cs_en"] as const) {
+      all.push({
+        word,
+        direction,
+        level: levelOf(word, direction),
+        practiced: practicedOf(word, direction),
+      });
+    }
+  }
+
+  const learning = all
+    .filter((candidate) => candidate.level <= LEARNING_MAX)
+    .sort((a, b) => a.level - b.level)
+    .slice(0, config(env, "LEARNING_POOL", 10));
+
+  // Known and mastered words compete on time, not level, and get their own
+  // quota: ranked against the learning pile they would never surface once the
+  // vocabulary grows.
+  const review = all
+    .filter(
+      (candidate) =>
+        candidate.level > LEARNING_MAX &&
+        daysSince(candidate.practiced) >= cooldownFor(candidate.level, env)
+    )
+    .sort(
+      (a, b) =>
+        daysSince(b.practiced) - cooldownFor(b.level, env) -
+        (daysSince(a.practiced) - cooldownFor(a.level, env))
+    )
+    .slice(0, config(env, "REVIEW_POOL", 5));
+
+  const pool = [...learning, ...review];
+  const wanted = Math.max(1, config(env, "WORDS_PER_SESSION", 1));
+  const picked: Candidate[] = [];
+  const usedWords = new Set<string>();
+
+  while (picked.length < wanted && pool.length > 0) {
+    const [candidate] = pool.splice(Math.floor(Math.random() * pool.length), 1);
+    if (!candidate || usedWords.has(candidate.word.id)) continue;
+    usedWords.add(candidate.word.id);
+    picked.push(candidate);
+  }
+
+  return picked;
+}
+
+export function buildReport(words: Word[], env: Env): string {
+  let learning = 0;
+  let known = 0;
+  let mastered = 0;
+
+  for (const word of words) {
+    const level = Math.max(word.level_en_cs, word.level_cs_en);
+    if (level >= MAX_LEVEL) mastered++;
+    else if (level > LEARNING_MAX) known++;
+    else learning++;
+  }
+
+  const lines = [`📊 Learning ${learning} · Known ${known} · Mastered ${mastered}`];
+
+  const learningWarn = config(env, "LEARNING_WARN", 40);
+  if (learning > learningWarn) {
+    lines.push(`⚠️ Learning: ${learning} words (limit ${learningWarn}) — consider reviewing`);
+  }
+
+  const reviewWarn = config(env, "REVIEW_WARN", 60);
+  if (known + mastered > reviewWarn) {
+    lines.push(
+      `⚠️ Known+Mastered: ${known + mastered} words (limit ${reviewWarn}) — consider reviewing`
+    );
+  }
+
+  return lines.join("\n");
 }
 
 async function readWords(env: Env): Promise<Word[]> {
@@ -211,8 +388,11 @@ async function readWords(env: Env): Promise<Word[]> {
     id: row.id ?? "",
     word: row.word ?? "",
     meaning: row.meaning ?? "",
-    state: row.state || "new",
-    next_review: row.next_review ?? "",
+    example: row.example ?? "",
+    level_en_cs: Number(row.level_en_cs) || 0,
+    level_cs_en: Number(row.level_cs_en) || 0,
+    practiced_en_cs: row.practiced_en_cs ?? "",
+    practiced_cs_en: row.practiced_cs_en ?? "",
   }));
 }
 
@@ -303,32 +483,46 @@ async function callClaude<T>({ system, user, schema, stub }: ClaudeCall<T>, env:
   return (schema ? JSON.parse(text) : text) as T;
 }
 
-function askQuestion(word: Word, env: Env): Promise<string> {
+function askQuestion(word: Word, direction: Direction, env: Env): Promise<string> {
+  const system =
+    direction === "en_cs"
+      ? "You are an English tutor for a Czech learner. Ask one short flashcard question " +
+        "about the target English word: what does it mean in Czech. " +
+        "Output only the question, no preamble."
+      : "You are an English tutor for a Czech learner. You are testing recall in the " +
+        "harder direction: give the Czech meaning and ask which English word it is. " +
+        "Never write the English word itself — that is the answer. " +
+        "Output only the question, no preamble.";
+
   return callClaude<string>(
     {
-      system:
-        "You are an English tutor for a Czech learner. Ask one short flashcard question " +
-        "about the target word. Ask for the Czech meaning, or for the word matching a " +
-        "definition. Output only the question, no preamble.",
-      user: `Target word: ${word.word}\nMeaning: ${word.meaning}`,
-      stub: () => `[stub] What does "${word.word}" mean in Czech?`,
+      system,
+      user: `English word: ${word.word}\nCzech meaning: ${word.meaning}\nExample: ${word.example}`,
+      stub: () =>
+        direction === "en_cs"
+          ? `[stub] What does "${word.word}" mean in Czech?`
+          : `[stub] Which English word means "${word.meaning}"?`,
     },
     env
   );
 }
-
 function evaluateAnswer(
-  session: ActiveSession,
+  question: Question,
   answer: string,
   env: Env
 ): Promise<Evaluation> {
+  const expecting =
+    question.direction === "en_cs"
+      ? "The learner should give the Czech meaning."
+      : "The learner should give the English word.";
+
   return callClaude<Evaluation>(
     {
       system:
         "You grade a Czech learner's flashcard answer about an English word. " +
-        "Accept synonyms and minor typos, in Czech or English. " +
+        `${expecting} Accept synonyms and minor typos. ` +
         "Mark 'bad' only if the meaning is wrong or missing. " +
-        "Write the feedback in English, and confirm the correct meaning briefly.",
+        "Write the feedback in English, and confirm the correct answer briefly.",
       schema: {
         type: "object",
         properties: {
@@ -340,20 +534,22 @@ function evaluateAnswer(
         additionalProperties: false,
       },
       user: [
-        `Word: ${session.word}`,
-        `Correct meaning: ${session.meaning}`,
-        `Question asked: ${session.question}`,
+        `English word: ${question.word}`,
+        `Czech meaning: ${question.meaning}`,
+        `Question asked: ${question.question}`,
         `Learner's answer: ${answer}`,
       ].join("\n"),
       stub: () => {
         const strip = (value: string) =>
-          value.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
-        const hit = strip(session.meaning)
+          value.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").trim();
+        const expected =
+          question.direction === "en_cs" ? question.meaning : question.word;
+        const hit = strip(expected)
           .split(/[;,]/)
           .some((variant) => strip(answer).includes(variant.trim()));
         return hit
-          ? { result: "good", score: 0.9, feedback: `[stub] Correct — ${session.meaning}.` }
-          : { result: "bad", score: 0.2, feedback: `[stub] No, it means ${session.meaning}.` };
+          ? { result: "good", score: 0.9, feedback: `[stub] Correct — ${expected}.` }
+          : { result: "bad", score: 0.2, feedback: `[stub] No, it is ${expected}.` };
       },
     },
     env

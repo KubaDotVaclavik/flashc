@@ -1,6 +1,6 @@
-import { readWords, writeWords, appendReview } from "./csv.js";
-import { applyReview } from "./srs.js";
-import type { ReviewResult } from "./types.js";
+import { readWords, writeWords } from "./csv.js";
+import { applyLevel } from "./srs.js";
+import type { Direction, ReviewResult } from "./types.js";
 
 const event = process.env.EVENT_TYPE;
 
@@ -15,6 +15,8 @@ if (event === "flashc-answer") {
 function recordAnswer(): void {
   const wordId = required("WORD_ID");
   const result = required("RESULT") as ReviewResult;
+  const direction = required("DIRECTION") as Direction;
+  const today = new Date().toISOString().slice(0, 10);
 
   const words = readWords();
   const word = words.find((candidate) => candidate.id === wordId);
@@ -22,20 +24,12 @@ function recordAnswer(): void {
     throw new Error(`Unknown word id ${wordId}`);
   }
 
-  appendReview({
-    timestamp: new Date().toISOString(),
-    word_id: wordId,
-    type: "flashcard",
-    direction: "EN->CS",
-    result,
-    score: Number(process.env.SCORE) || 0,
-    notes: process.env.ANSWER ?? "",
-  });
-
-  const updated = applyReview(word, result);
+  const updated = applyLevel(word, direction, result, today);
   writeWords(words.map((item) => (item.id === wordId ? updated : item)));
 
-  console.log(`Recorded ${result} for "${word.word}", next ${updated.next_review}.`);
+  const level =
+    direction === "en_cs" ? updated.level_en_cs : updated.level_cs_en;
+  console.log(`Recorded ${result} for "${word.word}" (${direction}), level ${level}.`);
 }
 
 function recordWord(): void {
@@ -47,6 +41,7 @@ function recordWord(): void {
     return;
   }
 
+  const startLevel = Number(process.env.START_LEVEL) || 0;
   const nextId = String(
     Math.max(0, ...words.map((item) => Number(item.id) || 0)) + 1
   );
@@ -58,18 +53,15 @@ function recordWord(): void {
       word,
       meaning: process.env.MEANING ?? "",
       example: process.env.EXAMPLE ?? "",
-      state: "new",
-      next_review: "",
-      interval: 0,
-      ease: 2.5,
-      successes: 0,
-      failures: 0,
+      level_en_cs: startLevel,
+      level_cs_en: startLevel,
+      practiced_en_cs: "",
+      practiced_cs_en: "",
       tags: "",
-      notes: "",
     },
   ]);
 
-  console.log(`Added "${word}".`);
+  console.log(`Added "${word}" at level ${startLevel}.`);
 }
 
 function required(name: string): string {

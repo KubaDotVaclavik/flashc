@@ -76,77 +76,64 @@ GitHub Actions bude sloužit jako jednoduchý orchestrátor. Nemá běžet perma
 
 # Datový model
 
-## words.csv
-
-Minimální návrh:
+Vše je v jediném souboru `data/words.csv`. Aktivní session žije v Cloudflare KV,
+ne na disku — historie procvičování se nikam neukládá, stačí konverzace v Telegramu.
 
 ```csv
-id,word,meaning,example,state,next_review,interval,ease,successes,failures,tags,notes
+id,word,meaning,example,level_en_cs,level_cs_en,practiced_en_cs,practiced_cs_en,tags
 ```
 
 Příklad:
 
 ```csv
-42,reluctant,neochotný,"I was reluctant to accept the offer.",learning,2026-09-20,2,2.5,4,1,work,
-43,subtle,"jemný; nepatrný","There is a subtle difference.",familiar,2026-09-22,4,2.6,5,1,general,
-44,cumbersome,těžkopádný,"The process is cumbersome.",new,,,,0,0,work,
+1,reluctant,neochotný,I was reluctant to accept the offer.,3,1,2026-09-21,2026-09-14,general
+2,subtle,jemný; nepatrný,There is a subtle difference.,2,2,,,general
 ```
 
-Nemusíme implementovat všechny sloupce hned. Návrh je otevřený úpravám.
+| Sloupec | Význam |
+|---|---|
+| `level_en_cs` | úroveň 0–8 pro směr EN→CS (vidíš `reluctant`, říkáš český význam) |
+| `level_cs_en` | úroveň 0–8 pro směr CS→EN (vidíš `neochotný`, říkáš anglické slovo) |
+| `practiced_en_cs` | datum posledního procvičení v tomto směru |
+| `practiced_cs_en` | totéž pro druhý směr |
 
-Možné states:
+Každý směr se učí nezávisle: CS→EN (produkce) je těžší než EN→CS (rozpoznání),
+takže jedna společná úroveň by slabší směr schovala za silnější.
 
-```text
-new
-learning
-familiar
-mastered
-suspended
-```
-
-Důležitější než samotný state je `next_review`.
+Slovo se z učení vyřadí smazáním řádku.
 
 ---
 
-# reviews.csv
+# Učící algoritmus
 
-Historie procvičování:
+Tři pásma:
 
-```csv
-timestamp,word_id,type,direction,result,score,notes
-```
+| Pásmo | Level | Cooldown | Pád při chybě | Výběr |
+|---|---|---|---|---|
+| Learning | 0–5 | — | 1 | podle úrovně + random |
+| Known | 6–7 | 5 / 12 dní | 2 | podle času |
+| Mastered | 8 | 25 dní | 3 | podle času |
 
-Příklad:
+Nové slovo začíná na `START_LEVEL` (výchozí 2), takže do Known vedou 4 správné
+odpovědi a do Mastered 6.
 
-```csv
-2026-09-18T12:15:00Z,42,dialog,EN->EN,good,0.9,"Used target word correctly"
-```
+**Výběr do session** pracuje s kandidáty = dvojicemi (slovo, směr). Dvě skupiny
+s pevnými kvótami, které spolu nesoutěží:
 
-Historie nemusí obsahovat kompletní transcript dialogu, pokud k tomu nebude důvod.
+* **Learning** — seřadit podle úrovně vzestupně, vzít `LEARNING_POOL` nejslabších.
+  Čas se neuplatňuje; u slova, které neumíš, je datum irelevantní.
+* **Known/Mastered** — jen kandidáti po vypršení cooldownu, seřazení podle toho,
+  jak dlouho jsou po něm; vzít nejvýš `REVIEW_POOL`.
 
----
+Z výsledného poolu se náhodně losuje `WORDS_PER_SESSION` kandidátů, nejvýš jeden
+směr na slovo. Oddělené kvóty jsou nutné — kdyby zralá slova soutěžila o prioritu
+s učícími, při větším slovníku by neprošla nikdy.
 
-# sessions.csv
+Algoritmus tím nezávisí na počtu session za den ani na počtu slov v session.
 
-Pro aktivní konverzace:
-
-```csv
-id,date,word_id,type,status,turn
-```
-
-Například:
-
-```csv
-abc123,2026-09-18,42,dialog,active,4
-```
-
-Po dokončení:
-
-```csv
-abc123,2026-09-18,42,dialog,completed,10
-```
-
-Session umožňuje GitHub Action zjistit, že uživatel odpověděl a konverzace má pokračovat.
+Konfigurace je v `[vars]` v `flashc-worker/wrangler.toml`. Krok nahoru, pády
+a hranice pásem jsou napevno v kódu — jsou to konstanty algoritmu, které na sobě
+vzájemně závisí.
 
 ---
 
@@ -427,26 +414,6 @@ correction
 A případně později i další knowledge items mimo angličtinu.
 
 Ale **nenavrhovat nyní obecný knowledge-management systém**. Angličtina je první a hlavní use case.
-
-## Plánované features
-
-### Osvěžování naučených slovíček
-
-Slovíčka ve stavu `mastered` se po delší době znovu zařadí do výuky, aby se osvěžila.
-
-Dnešní chování: `applyReview()` po šesti úspěších nastaví `mastered` a interval dál roste
-exponenciálně, takže slovo prakticky vypadne z oběhu.
-
-K rozhodnutí: strop na interval (např. max 180 dní), nebo občasná náhodná refresh otázka
-mimo `next_review`.
-
-### Opačný směr překladu
-
-Procvičovat i CS→EN, nejen EN→CS.
-
-`reviews.csv` už sloupec `direction` má, ale zapisuje se do něj natvrdo `EN->CS`.
-Bude potřeba směr vybírat (náhodně, nebo podle toho, který je slabší), předat ho
-do `generateQuestion()` a do vyhodnocení.
 
 ---
 
