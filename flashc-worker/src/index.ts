@@ -315,7 +315,7 @@ async function askForTopic(word: string, chatId: string, env: Env): Promise<void
   );
   if (duplicate) {
     await sendMessage(
-      `"${duplicate.word}" — ${duplicate.meaning} is already on your list.`,
+      `${bold(duplicate.word)} — ${escapeHtml(duplicate.meaning)} is already on your list.`,
       chatId,
       env
     );
@@ -328,7 +328,10 @@ async function askForTopic(word: string, chatId: string, env: Env): Promise<void
     return;
   }
 
-  await sendMessage(`${TOPIC_PREFIX}${word}${TOPIC_SUFFIX}`, chatId, env, {
+  // The word is read back out of this text when a button is tapped, and what
+  // comes back is the rendered message, so it is escaped on the way out and
+  // compared against the rendering, never against the markup.
+  await sendMessage(`${TOPIC_PREFIX}${escapeHtml(word)}${TOPIC_SUFFIX}`, chatId, env, {
     inline_keyboard: [
       choices.map((topic) => ({
         text: topic.label,
@@ -398,6 +401,7 @@ async function handleCallback(
  */
 function questionText(question: string, index: number, total: number): string {
   const counter = total > 1 ? ` (${index + 1}/${total})` : "";
+  // askQuestion builds this, escaping as it goes, so it is already HTML.
   return `❓${counter} ${question}`;
 }
 
@@ -449,7 +453,7 @@ async function startSession(
       word: candidate.word.word,
       meaning: candidate.word.meaning,
       direction: candidate.direction,
-      question: await askQuestion(candidate.word, candidate.direction, env),
+      question: askQuestion(candidate.word, candidate.direction),
     });
   }
 
@@ -501,6 +505,8 @@ async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<vo
   }
 
   const mark = evaluation.result === "good" ? "✅" : "❌";
+  // Claude writes this as Telegram HTML; sendMessage falls back to plain text
+  // if it turns out malformed.
   await sendMessage(`${mark} ${evaluation.feedback}`, chatId, env);
 
   if (done) {
@@ -531,7 +537,7 @@ async function addWord(
 
   if (!word || !details.meaning.trim()) {
     await sendMessage(
-      `I don't know the word "${input}". Check the spelling and try /add again.`,
+      `I don't know the word ${bold(input)}. Check the spelling and try /add again.`,
       chatId,
       env
     );
@@ -546,7 +552,7 @@ async function addWord(
     // Worth naming both forms: typing a Czech word gives no hint that the
     // English side is what already sits on the list.
     await sendMessage(
-      `"${duplicate.word}" — ${duplicate.meaning} is already on your list.`,
+      `${bold(duplicate.word)} — ${escapeHtml(duplicate.meaning)} is already on your list.`,
       chatId,
       env
     );
@@ -563,7 +569,9 @@ async function addWord(
   };
   await dispatch("flashc-add", payload, env);
   await sendMessage(
-    `➕ ${word} — ${details.meaning}\n[${topic.label}]\n\n${details.example}`,
+    `➕ ${bold(word)} — ${escapeHtml(details.meaning)}\n` +
+      `<i>${escapeHtml(topic.label)}</i>\n\n` +
+      `${escapeHtml(details.example)}`,
     chatId,
     env
   );
@@ -799,28 +807,81 @@ async function answerCallbackQuery(callbackId: string, env: Env): Promise<void> 
   );
 }
 
+/**
+ * Escapes text for Telegram's HTML parse mode. Everything that reaches a
+ * message and was not written here — a word, a Czech meaning, Claude's
+ * feedback — goes through this, or an stray "<" costs the whole message:
+ * Telegram rejects malformed HTML outright rather than sending it as-is.
+ */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/** Bold, for the one word a message is really about. */
+function bold(text: string): string {
+  return `<b>${escapeHtml(text)}</b>`;
+}
+
+/** Strips tags and resolves entities, for when the HTML turns out to be broken. */
+function stripHtml(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+async function post(
+  method: string,
+  body: Record<string, unknown>,
+  env: Env
+): Promise<Response> {
+  return fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 async function sendMessage(
   text: string,
   chatId: string,
   env: Env,
   replyMarkup?: Record<string, unknown>
 ): Promise<void> {
-  const response = await fetch(
-    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-      }),
-    }
+  const markup = replyMarkup ? { reply_markup: replyMarkup } : {};
+  const response = await post(
+    "sendMessage",
+    { chat_id: chatId, text, parse_mode: "HTML", ...markup },
+    env
   );
 
-  if (!response.ok) {
-    throw new Error(`Telegram sendMessage failed: ${response.status} ${await response.text()}`);
+  if (response.ok) return;
+
+  const body = await response.text();
+
+  // Telegram refuses a message whose markup is malformed rather than sending it
+  // plain, and some of this text is written by Claude. Losing the formatting is
+  // an acceptable outcome; losing the feedback is not.
+  if (body.includes("can't parse entities")) {
+    console.error(`Falling back to plain text: ${body}`);
+    const retry = await post(
+      "sendMessage",
+      { chat_id: chatId, text: stripHtml(text), ...markup },
+      env
+    );
+    if (retry.ok) return;
+    throw new Error(
+      `Telegram sendMessage failed even as plain text: ${retry.status} ${await retry.text()}`
+    );
   }
+
+  throw new Error(`Telegram sendMessage failed: ${response.status} ${body}`);
 }
 
 type ClaudeCall<T> = {
@@ -897,42 +958,22 @@ async function callClaude<T>(
   return (schema ? JSON.parse(text) : text) as T;
 }
 
-function askQuestion(word: Word, direction: Direction, env: Env): Promise<string> {
-  // The grader only ever judges the translation, so the question must not ask
-  // for anything else: a request to also use the word in a sentence would go
-  // unmarked either way.
-  const scope =
-    "Ask for the translation and nothing else. Do not ask for a sentence, " +
-    "a definition, or any other extra task. " +
-    "Output one question and nothing else — no preamble, no follow-up.";
+/**
+ * Builds the question instead of asking Claude for it. A flashcard question has
+ * exactly one shape, so a model only added variation ("how do you say…" one
+ * time, "which English word is…" the next) along with a call, a second or two
+ * of waiting, and one more chance to emit markup that Telegram would refuse.
+ */
+function askQuestion(word: Word, direction: Direction): string {
+  if (direction === "en_cs") {
+    return `What does ${bold(word.word)} mean in Czech?`;
+  }
 
-  const system =
-    direction === "en_cs"
-      ? "You are an English tutor for a Czech learner. Ask one short flashcard " +
-        "question about the target English word: what does it mean in Czech. " +
-        scope
-      : "You are an English tutor for a Czech learner. You are testing recall in the " +
-        "harder direction: give the Czech meaning and ask which English word it is. " +
-        "Never write the English word itself — that is the answer. " +
-        scope;
-
-  return callClaude<string>(
-    {
-      model: "fast",
-      system,
-      // The example sentence contains the English word, so it is withheld when
-      // that word is what the learner has to produce.
-      user:
-        direction === "en_cs"
-          ? `English word: ${word.word}\nCzech meaning: ${word.meaning}\nExample: ${word.example}`
-          : `English word: ${word.word}\nCzech meaning: ${word.meaning}`,
-      stub: () =>
-        direction === "en_cs"
-          ? `[stub] What does "${word.word}" mean in Czech?`
-          : `[stub] Which English word means "${word.meaning}"?`,
-    },
-    env
-  );
+  // "jemný; nepatrný" asked whole reads badly and gives away how many senses
+  // the word has, so only the first one is put to the learner. The grader still
+  // sees them all and accepts any.
+  const [primary = word.meaning] = word.meaning.split(/[;,]/);
+  return `Which English word means ${bold(primary.trim())}?`;
 }
 function evaluateAnswer(
   question: Question,
@@ -962,7 +1003,18 @@ function evaluateAnswer(
         "meant. " +
         "Mark 'bad' when the answer is wrong, missing, or says nothing — " +
         `"I don't know" is 'bad'. ` +
-        "Write the feedback in English, and confirm the correct answer briefly.",
+        // A fixed shape, so the feedback reads the same every time instead of
+        // being reinvented per answer.
+        "Write the feedback in English as one line, in exactly this shape: " +
+        "the correct answer first, in bold, then an em dash, then at most one " +
+        "short sentence. For a correct answer that sentence is optional; for a " +
+        "wrong one, say briefly what was wrong. " +
+        "Example: <b>subtle</b> — you wrote the opposite. " +
+        // Telegram parses this as HTML and refuses the whole message if the
+        // markup is malformed, so the rules are spelled out rather than assumed.
+        "Use Telegram HTML: only <b>, <i> and <code>, each properly closed. " +
+        "Write &amp; for &, &lt; for < and &gt; for >, everywhere in the text. " +
+        "Use no other tags and no Markdown.",
       schema: {
         type: "object",
         properties: {
@@ -987,8 +1039,8 @@ function evaluateAnswer(
           .split(/[;,]/)
           .some((variant) => strip(answer).includes(variant.trim()));
         return hit
-          ? { result: "good", feedback: `[stub] Correct — ${expected}.` }
-          : { result: "bad", feedback: `[stub] No, it is ${expected}.` };
+          ? { result: "good", feedback: `${bold(expected)} — [stub] correct.` }
+          : { result: "bad", feedback: `${bold(expected)} — [stub] not what you wrote.` };
       },
     },
     env
