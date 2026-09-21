@@ -108,7 +108,13 @@ export default {
       return new Response("Forbidden", { status: 403 });
     }
 
-    let update: { message?: { text?: unknown; chat?: { id?: unknown } } };
+    let update: {
+      message?: {
+        text?: unknown;
+        chat?: { id?: unknown };
+        reply_to_message?: { text?: unknown };
+      };
+    };
     try {
       update = await request.json();
     } catch {
@@ -127,9 +133,22 @@ export default {
       return new Response("ignored", { status: 200 });
     }
 
+    const repliedTo = update.message?.reply_to_message?.text;
+
     // Telegram retries a webhook it considers failed, which would double-grade
     // an answer. Returning 200 immediately and working in the background avoids that.
-    ctx.waitUntil(guard(handleMessage(text.trim(), chatId, env), chatId, env));
+    ctx.waitUntil(
+      guard(
+        handleMessage(
+          text.trim(),
+          typeof repliedTo === "string" ? repliedTo : undefined,
+          chatId,
+          env
+        ),
+        chatId,
+        env
+      )
+    );
     return new Response("ok", { status: 200 });
   },
 
@@ -162,14 +181,32 @@ async function guard(work: Promise<void>, chatId: string, env: Env): Promise<voi
   }
 }
 
-async function handleMessage(text: string, chatId: string, env: Env): Promise<void> {
-  if (text === "/add" || text.startsWith("/add ")) {
+const ADD_PROMPT = "Which word do you want to add?";
+
+async function handleMessage(
+  text: string,
+  repliedTo: string | undefined,
+  chatId: string,
+  env: Env
+): Promise<void> {
+  // Tapping /add in Telegram's command menu sends a bare "/add", so the bot
+  // asks for the word and reads it from the reply. Matching on the prompt text
+  // keeps this stateless, and keeps an open practice question undisturbed.
+  if (repliedTo === ADD_PROMPT) {
+    await addWord(text, chatId, env);
+  } else if (text === "/add") {
+    await promptForWord(chatId, env);
+  } else if (text.startsWith("/add ")) {
     await addWord(text.slice(4).trim(), chatId, env);
   } else if (text === "/session") {
     await startSession(true, chatId, env);
   } else {
     await gradeAnswer(text, chatId, env);
   }
+}
+
+function promptForWord(chatId: string, env: Env): Promise<void> {
+  return sendMessage(ADD_PROMPT, chatId, env, { force_reply: true });
 }
 
 async function startSession(
@@ -288,7 +325,7 @@ async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<vo
 
 async function addWord(word: string, chatId: string, env: Env): Promise<void> {
   if (!word) {
-    await sendMessage("Usage: /add <word>", chatId, env);
+    await promptForWord(chatId, env);
     return;
   }
 
@@ -473,13 +510,22 @@ async function dispatch(
   }
 }
 
-async function sendMessage(text: string, chatId: string, env: Env): Promise<void> {
+async function sendMessage(
+  text: string,
+  chatId: string,
+  env: Env,
+  replyMarkup?: Record<string, unknown>
+): Promise<void> {
   const response = await fetch(
     `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text }),
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      }),
     }
   );
 
