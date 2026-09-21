@@ -1,3 +1,4 @@
 id,word,meaning,example,level_en_cs,level_cs_en,practiced_en_cs,practiced_cs_en,topic
 1,reluctant,neochotný,I was reluctant to accept the offer.,2,2,,,general
 2,subtle,jemný; nepatrný,There is a subtle difference.,2,2,,,general
+3,intent,"úmysl, záměr",The API call failed because the intent parameter was missing from the request.,2,2,,,it
