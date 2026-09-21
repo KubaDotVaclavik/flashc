@@ -366,6 +366,16 @@ async function handleCallback(
   await addWord(word, topic, chatId, env);
 }
 
+/**
+ * Questions are what the learner has to act on, so they carry a marker that
+ * sets them apart from feedback and reports in a busy chat. One place, so the
+ * three spots a question can be sent from cannot drift apart.
+ */
+function questionText(question: string, index: number, total: number): string {
+  const counter = total > 1 ? ` (${index + 1}/${total})` : "";
+  return `❓${counter} ${question}`;
+}
+
 async function startSession(
   announceIdle: boolean,
   chatId: string,
@@ -377,7 +387,8 @@ async function startSession(
       const open = active.questions[active.current];
       if (open) {
         await sendMessage(
-          `You still have an open question:\n\n${open.question}`,
+          "You still have an open question:\n\n" +
+            questionText(open.question, active.current, active.questions.length),
           chatId,
           env
         );
@@ -420,9 +431,11 @@ async function startSession(
   const session: ActiveSession = { questions, current: 0 };
   await env.SESSIONS.put(sessionKey(chatId), JSON.stringify(session));
 
-  const first = questions[0]!;
-  const prefix = questions.length > 1 ? `(1/${questions.length}) ` : "";
-  await sendMessage(prefix + first.question, chatId, env);
+  await sendMessage(
+    questionText(questions[0]!.question, 0, questions.length),
+    chatId,
+    env
+  );
 }
 
 async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<void> {
@@ -471,9 +484,8 @@ async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<vo
     // for a nudge about the size of each band.
     await sendMessage(buildReport(await readWords(chatId, env), env), chatId, env);
   } else {
-    const upcoming = session.questions[next]!;
     await sendMessage(
-      `(${next + 1}/${session.questions.length}) ${upcoming.question}`,
+      questionText(session.questions[next]!.question, next, session.questions.length),
       chatId,
       env
     );
