@@ -1,4 +1,4 @@
-name = "flashc-telegram-relay"
+name = "flashc-worker"
 main = "src/index.ts"
 compatibility_date = "2024-09-19"
 

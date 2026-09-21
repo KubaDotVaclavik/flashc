@@ -198,7 +198,7 @@ async function readWords(env: Env): Promise<Word[]> {
       headers: {
         Authorization: `Bearer ${env.GITHUB_TOKEN}`,
         Accept: "application/vnd.github.raw+json",
-        "User-Agent": "flashc-telegram-relay",
+        "User-Agent": "flashc-worker",
       },
     }
   );
@@ -228,7 +228,7 @@ async function dispatch(
       headers: {
         Authorization: `Bearer ${env.GITHUB_TOKEN}`,
         Accept: "application/vnd.github+json",
-        "User-Agent": "flashc-telegram-relay",
+        "User-Agent": "flashc-worker",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ event_type: eventType, client_payload: payload }),
