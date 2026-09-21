@@ -37,8 +37,8 @@ TOPICS = """
 # updates carry the sender's name and the text of every message.
 LOG_UPDATES = "false"
 START_LEVEL = "2"        # level a new word starts at (0-2)
-WORDS_PER_SESSION = "3"  # questions asked per session
-LEARNING_POOL = "10"     # weakest learning candidates entering the draw
+WORDS_PER_SESSION = "5"  # questions asked per session
+LEARNING_POOL = "15"     # weakest learning candidates entering the draw
 REVIEW_POOL = "5"        # due known/mastered candidates entering the draw
 COOLDOWN_6 = "5"         # days a level 6 word rests
 COOLDOWN_7 = "12"
