@@ -26,9 +26,9 @@ CLAUDE_MODEL = "claude-sonnet-5"
 TOPICS = """
 [
   { "key": "it", "label": "IT",
-    "instruction": "The learner works in software development. Explain the meaning as it is used in IT, and write an example sentence from a developer's working life." },
+    "instruction": "The learner works in software development. Where the word has an IT sense, translate that sense, and set the example sentence in a developer's working life." },
   { "key": "general", "label": "General",
-    "instruction": "Explain the everyday meaning and write a natural example sentence from ordinary life." }
+    "instruction": "Translate the everyday sense and set the example sentence in ordinary life." }
 ]
 """
 START_LEVEL = "2"        # level a new word starts at (0-2)

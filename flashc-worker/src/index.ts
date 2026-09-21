@@ -856,6 +856,11 @@ function lookupWord(input: string, topic: Topic, env: Env): Promise<WordDetails>
         "The input is one word or phrase, in English or in Czech. " +
         "Return the English word in 'word', its Czech meaning in 'meaning', " +
         "and one natural example sentence in 'example'. " +
+        // 'meaning' is also read back to the learner as the CS->EN question, so
+        // a definition there both reads absurdly and gives the answer away.
+        "'meaning' is a translation, not a definition: one to three Czech " +
+        "words, or a few comma-separated variants. Never a whole clause, and " +
+        "never a parenthetical gloss. " +
         "When the input is Czech, 'word' is its English translation. " +
         "Write 'word' the way a dictionary would: lowercase, unless it is a " +
         "proper noun or an acronym that is always capitalised. Drop any " +
