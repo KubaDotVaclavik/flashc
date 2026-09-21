@@ -5,9 +5,8 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noUncheckedIndexedAccess": true,
-    "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": ["@cloudflare/workers-types"]
   },
-  "include": ["src/**/*.ts", "shared/**/*.ts"]
+  "include": ["src/**/*.ts", "../shared/**/*.ts"]
 }
