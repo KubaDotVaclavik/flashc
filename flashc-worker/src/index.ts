@@ -92,6 +92,8 @@ type Evaluation = {
 };
 
 type WordDetails = {
+  /** Empty when the input is not a word Claude recognises in either language. */
+  word: string;
   meaning: string;
   example: string;
 };
@@ -300,9 +302,19 @@ async function askForTopic(word: string, chatId: string, env: Env): Promise<void
     return;
   }
 
+  // A cheap pre-check on the literal input: catches re-adding a word you typed
+  // in English before spending a Claude call. The authoritative check runs in
+  // addWord, on the English form Claude returns.
   const known = await readWords(chatId, env);
-  if (known.some((item) => item.word.toLowerCase() === word.toLowerCase())) {
-    await sendMessage(`"${word}" is already on your list.`, chatId, env);
+  const duplicate = known.find(
+    (item) => item.word.toLowerCase() === word.toLowerCase()
+  );
+  if (duplicate) {
+    await sendMessage(
+      `"${duplicate.word}" — ${duplicate.meaning} is already on your list.`,
+      chatId,
+      env
+    );
     return;
   }
 
@@ -468,12 +480,41 @@ async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<vo
 }
 
 async function addWord(
-  word: string,
+  input: string,
   topic: Topic,
   chatId: string,
   env: Env
 ): Promise<void> {
-  const details = await lookupWord(word, topic, env);
+  // Claude settles what actually goes in the CSV: the input may be Czech, or
+  // capitalised, or not a word at all. It runs before the duplicate check
+  // because only the English form it returns can be compared with the list.
+  const details = await lookupWord(input, topic, env);
+  const word = details.word.trim();
+
+  if (!word || !details.meaning.trim()) {
+    await sendMessage(
+      `I don't know the word "${input}". Check the spelling and try /add again.`,
+      chatId,
+      env
+    );
+    return;
+  }
+
+  const known = await readWords(chatId, env);
+  const duplicate = known.find(
+    (item) => item.word.toLowerCase() === word.toLowerCase()
+  );
+  if (duplicate) {
+    // Worth naming both forms: typing a Czech word gives no hint that the
+    // English side is what already sits on the list.
+    await sendMessage(
+      `"${duplicate.word}" — ${duplicate.meaning} is already on your list.`,
+      chatId,
+      env
+    );
+    return;
+  }
+
   const payload: AddPayload = {
     chat_id: chatId,
     word,
@@ -806,27 +847,45 @@ function evaluateAnswer(
   );
 }
 
-function lookupWord(word: string, topic: Topic, env: Env): Promise<WordDetails> {
+function lookupWord(input: string, topic: Topic, env: Env): Promise<WordDetails> {
   return callClaude<WordDetails>(
     {
       system:
         "You help a Czech learner build an English vocabulary list. " +
-        "Give the Czech meaning and one natural example sentence. " +
+        "The input is one word or phrase, in English or in Czech. " +
+        "Return the English word in 'word', its Czech meaning in 'meaning', " +
+        "and one natural example sentence in 'example'. " +
+        "When the input is Czech, 'word' is its English translation. " +
+        "Write 'word' the way a dictionary would: lowercase, unless it is a " +
+        "proper noun or an acronym that is always capitalised. Drop any " +
+        "leading 'to ' from verbs. " +
+        "If the input is not a real word or phrase in either language — a typo " +
+        "or random characters — return an empty string for all three fields. " +
         topic.instruction,
       schema: {
         type: "object",
         properties: {
+          word: { type: "string" },
           meaning: { type: "string" },
           example: { type: "string" },
         },
-        required: ["meaning", "example"],
+        required: ["word", "meaning", "example"],
         additionalProperties: false,
       },
-      user: `Word: ${word}`,
-      stub: () => ({
-        meaning: `[stub] ${topic.key} meaning of ${word}`,
-        example: `[stub] This is an example with ${word}.`,
-      }),
+      user: `Input: ${input}`,
+      stub: () => {
+        // The stub cannot tell a word from gibberish, so it approximates:
+        // vowel-less runs of letters are what typos usually look like.
+        const normalised = input.toLowerCase().replace(/^to\s+/, "").trim();
+        if (/^[a-z]{4,}$/.test(normalised) && !/[aeiouy]/.test(normalised)) {
+          return { word: "", meaning: "", example: "" };
+        }
+        return {
+          word: normalised,
+          meaning: `[stub] ${topic.key} meaning of ${normalised}`,
+          example: `[stub] This is an example with ${normalised}.`,
+        };
+      },
     },
     env
   );

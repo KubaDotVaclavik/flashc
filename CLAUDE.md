@@ -125,6 +125,21 @@ Téma ovlivňuje jen generování při `/add`. Výběr slov do session na něm
 nezávisí — filtr podle tématu by znamenal, že se slova z ostatních témat
 přestanou objevovat úplně.
 
+## Zadávání slov
+
+Zadat lze česky i anglicky. Do `word` jde vždy anglický tvar, který určí
+Claude — ten zároveň řekne, jestli slovo vůbec existuje. Nesmysl se odmítne
+a nic se nezapíše.
+
+Tvar slova neurčuje kód, ale Claude: lowercase, ale `Docker` a `API` si
+velké písmeno nechají, a u sloves se zahazuje úvodní `to `. Tvrdý
+`toLowerCase()` by vlastní jména a zkratky rozbil.
+
+Duplicita se proto kontroluje až na přeloženém tvaru — `neochotný` musí
+najít existující `reluctant`. Před voláním Claude běží ještě levná
+kontrola na doslovný vstup, která ušetří API volání, když přidáváš slovo,
+co už anglicky máš.
+
 ---
 
 # Učící algoritmus
