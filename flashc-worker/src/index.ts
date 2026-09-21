@@ -88,7 +88,6 @@ type ActiveSession = {
 
 type Evaluation = {
   result: AnswerPayload["result"];
-  score: number;
   feedback: string;
 };
 
@@ -844,10 +843,9 @@ function evaluateAnswer(
         type: "object",
         properties: {
           result: { type: "string", enum: ["good", "bad"] },
-          score: { type: "number", minimum: 0, maximum: 1 },
           feedback: { type: "string" },
         },
-        required: ["result", "score", "feedback"],
+        required: ["result", "feedback"],
         additionalProperties: false,
       },
       user: [
@@ -865,8 +863,8 @@ function evaluateAnswer(
           .split(/[;,]/)
           .some((variant) => strip(answer).includes(variant.trim()));
         return hit
-          ? { result: "good", score: 0.9, feedback: `[stub] Correct — ${expected}.` }
-          : { result: "bad", score: 0.2, feedback: `[stub] No, it is ${expected}.` };
+          ? { result: "good", feedback: `[stub] Correct — ${expected}.` }
+          : { result: "bad", feedback: `[stub] No, it is ${expected}.` };
       },
     },
     env

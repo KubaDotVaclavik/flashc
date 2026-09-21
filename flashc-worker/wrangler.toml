@@ -32,7 +32,7 @@ TOPICS = """
 ]
 """
 START_LEVEL = "2"        # level a new word starts at (0-2)
-WORDS_PER_SESSION = "1"  # questions asked per session
+WORDS_PER_SESSION = "3"  # questions asked per session
 LEARNING_POOL = "10"     # weakest learning candidates entering the draw
 REVIEW_POOL = "5"        # due known/mastered candidates entering the draw
 COOLDOWN_6 = "5"         # days a level 6 word rests
