@@ -62,6 +62,7 @@ type Env = {
   ANTHROPIC_API_KEY?: string;
   CLAUDE_MODEL?: string;
   CLAUDE_MODEL_FAST?: string;
+  LOG_UPDATES?: string;
   TOPICS?: string;
   START_LEVEL?: string;
   WORDS_PER_SESSION?: string;
@@ -169,8 +170,16 @@ export default {
         message?: { message_id?: unknown; text?: unknown; chat?: { id?: unknown } };
       };
     };
+    const raw = await request.text();
+    // The whole update, as Telegram sent it, for `wrangler tail`. It carries the
+    // sender's name and every word of the message, so it is off unless
+    // LOG_UPDATES is set — and the webhook secret never appears in the body.
+    if (env.LOG_UPDATES === "true") {
+      console.log(`Telegram update: ${raw.slice(0, 4000)}`);
+    }
+
     try {
-      update = await request.json();
+      update = JSON.parse(raw);
     } catch {
       return new Response("Bad request", { status: 400 });
     }
@@ -533,9 +542,11 @@ async function addWord(
   // capitalised, or not a word at all. It runs before the duplicate check
   // because only the English form it returns can be compared with the list.
   const details = await lookupWord(input, topic, env);
-  const word = details.word.trim();
+  // The schema requires all three, but this is a model's JSON: a missing field
+  // should read as "I don't know that word", not crash the handler.
+  const word = (details.word ?? "").trim();
 
-  if (!word || !details.meaning.trim()) {
+  if (!word || !(details.meaning ?? "").trim()) {
     await sendMessage(
       `I don't know the word ${bold(input)}. Check the spelling and try /add again.`,
       chatId,

@@ -33,6 +33,9 @@ TOPICS = """
     "instruction": "Translate the everyday sense and set the example sentence in ordinary life." }
 ]
 """
+# Logs each Telegram update verbatim to `wrangler tail`. Off by default: the
+# updates carry the sender's name and the text of every message.
+LOG_UPDATES = "true"
 START_LEVEL = "2"        # level a new word starts at (0-2)
 WORDS_PER_SESSION = "3"  # questions asked per session
 LEARNING_POOL = "10"     # weakest learning candidates entering the draw
