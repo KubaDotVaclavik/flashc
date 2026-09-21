@@ -776,20 +776,33 @@ async function callClaude<T>({ system, user, schema, stub }: ClaudeCall<T>, env:
 }
 
 function askQuestion(word: Word, direction: Direction, env: Env): Promise<string> {
+  // The grader only ever judges the translation, so the question must not ask
+  // for anything else: a request to also use the word in a sentence would go
+  // unmarked either way.
+  const scope =
+    "Ask for the translation and nothing else. Do not ask for a sentence, " +
+    "a definition, or any other extra task. " +
+    "Output one question and nothing else — no preamble, no follow-up.";
+
   const system =
     direction === "en_cs"
-      ? "You are an English tutor for a Czech learner. Ask one short flashcard question " +
-        "about the target English word: what does it mean in Czech. " +
-        "Output only the question, no preamble."
+      ? "You are an English tutor for a Czech learner. Ask one short flashcard " +
+        "question about the target English word: what does it mean in Czech. " +
+        scope
       : "You are an English tutor for a Czech learner. You are testing recall in the " +
         "harder direction: give the Czech meaning and ask which English word it is. " +
         "Never write the English word itself — that is the answer. " +
-        "Output only the question, no preamble.";
+        scope;
 
   return callClaude<string>(
     {
       system,
-      user: `English word: ${word.word}\nCzech meaning: ${word.meaning}\nExample: ${word.example}`,
+      // The example sentence contains the English word, so it is withheld when
+      // that word is what the learner has to produce.
+      user:
+        direction === "en_cs"
+          ? `English word: ${word.word}\nCzech meaning: ${word.meaning}\nExample: ${word.example}`
+          : `English word: ${word.word}\nCzech meaning: ${word.meaning}`,
       stub: () =>
         direction === "en_cs"
           ? `[stub] What does "${word.word}" mean in Czech?`
