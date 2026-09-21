@@ -105,11 +105,18 @@ export default {
       return new Response("Forbidden", { status: 403 });
     }
 
-    let update: { message?: { text?: unknown } };
+    let update: { message?: { text?: unknown; chat?: { id?: unknown } } };
     try {
       update = await request.json();
     } catch {
       return new Response("Bad request", { status: 400 });
+    }
+
+    // Anyone who knows the bot's username can message it, and replies always go
+    // to our own chat — so a stranger could never read the answers, but could
+    // add words or answer an open question on our behalf.
+    if (String(update.message?.chat?.id ?? "") !== env.TELEGRAM_CHAT_ID) {
+      return new Response("ignored", { status: 200 });
     }
 
     const text = update.message?.text;
