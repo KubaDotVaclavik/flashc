@@ -60,6 +60,7 @@ type Env = {
   GITHUB_TOKEN: string;
   GITHUB_REPO: string;
   ANTHROPIC_API_KEY?: string;
+  CLAUDE_MODEL?: string;
   TOPICS?: string;
   START_LEVEL?: string;
   WORDS_PER_SESSION?: string;
@@ -752,7 +753,7 @@ async function callClaude<T>({ system, user, schema, stub }: ClaudeCall<T>, env:
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "claude-opus-5",
+      model: env.CLAUDE_MODEL ?? "claude-sonnet-5",
       max_tokens: 1000,
       output_config: outputConfig,
       system,
