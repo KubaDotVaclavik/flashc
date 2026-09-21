@@ -15,7 +15,7 @@ crons = ["0 6,11,17 * * *"]
 [vars]
 # Chats allowed to use the bot; each gets its own data/chat_<id>.csv.
 # Not a secret — knowing a chat id grants nothing without the account itself.
-TELEGRAM_CHAT_IDS = "8605045164"
+TELEGRAM_CHAT_IDS = "8605045164,8828858270"
 # Asking and grading are mechanical and run several times a day, so they go to
 # the cheap model. Looking a word up is the one call whose output is stored and
 # read for years, so it gets the better one. Per-workspace rate limits in the

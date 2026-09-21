@@ -286,6 +286,10 @@ async function guard(work: Promise<void>, chatId: string, env: Env): Promise<voi
 }
 
 const ADD_PROMPT = "Which word do you want to add?";
+
+// Messages go out as HTML, where a bare "/add <word>" reads as an opening tag
+// and costs the whole message. The placeholder is marked up as code instead.
+const ADD_USAGE = "/add <code>&lt;word&gt;</code>";
 const TOPIC_PREFIX = "Topic for ";
 const TOPIC_SUFFIX = "?";
 const CALLBACK_PREFIX = "topic:";
@@ -459,8 +463,8 @@ async function startSession(
     await env.SESSIONS.put(idleKey(chatId), today);
     await sendMessage(
       words.length === 0
-        ? "You have no words yet. Add your first one with /add <word>."
-        : "Nothing to practise right now — everything you know is still resting. Add a word with /add <word>.",
+        ? `You have no words yet. Add your first one with ${ADD_USAGE}.`
+        : `Nothing to practise right now — everything you know is still resting. Add a word with ${ADD_USAGE}.`,
       chatId,
       env
     );
@@ -493,7 +497,7 @@ async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<vo
   const open = session?.questions[session.current];
   if (!session || !open) {
     await sendMessage(
-      "No practice session is running. Start one with /session, or add a word with /add <word>.",
+      `No practice session is running. Start one with /session, or add a word with ${ADD_USAGE}.`,
       chatId,
       env
     );
