@@ -1,13 +1,13 @@
-name: Telegram Inbound Message
+name: Record learning data
 
 on:
   repository_dispatch:
-    types: [telegram-message]
+    types: [flashc-answer, flashc-add]
 
 concurrency: flashc-data
 
 jobs:
-  handle-message:
+  record:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -21,10 +21,14 @@ jobs:
 
       - run: npx tsx src/reply.ts
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MESSAGE_TEXT: ${{ github.event.client_payload.text }}
+          EVENT_TYPE: ${{ github.event.action }}
+          WORD_ID: ${{ github.event.client_payload.word_id }}
+          RESULT: ${{ github.event.client_payload.result }}
+          SCORE: ${{ github.event.client_payload.score }}
+          ANSWER: ${{ github.event.client_payload.answer }}
+          WORD: ${{ github.event.client_payload.word }}
+          MEANING: ${{ github.event.client_payload.meaning }}
+          EXAMPLE: ${{ github.event.client_payload.example }}
 
       - name: Commit data changes
         run: |
@@ -35,6 +39,6 @@ jobs:
           git config user.name "flashc-bot"
           git config user.email "noreply@github.com"
           git add data
-          git commit -m "Reply: update learning state"
+          git commit -m "Record ${{ github.event.action }}"
           git pull --rebase
           git push

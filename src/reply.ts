@@ -1,53 +1,63 @@
-import {
-  readWords,
-  writeWords,
-  readSessions,
-  writeSessions,
-  appendReview,
-} from "./csv.js";
+import { readWords, writeWords, appendReview } from "./csv.js";
 import { applyReview } from "./srs.js";
-import { evaluateAnswer, lookupWord } from "./claude.js";
-import { sendMessage } from "./telegram.js";
-import { startSession } from "./session.js";
+import type { ReviewResult } from "./types.js";
 
-const text = (process.env.MESSAGE_TEXT ?? "").trim();
-if (!text) {
-  console.log("Empty message, nothing to do.");
-  process.exit(0);
-}
+const event = process.env.EVENT_TYPE;
 
-if (text === "/add" || text.startsWith("/add ")) {
-  await addWord(text.slice(4).trim());
-} else if (text === "/session") {
-  await startSession(true);
+if (event === "flashc-answer") {
+  recordAnswer();
+} else if (event === "flashc-add") {
+  recordWord();
 } else {
-  await answerSession(text);
+  throw new Error(`Unknown event type: ${event}`);
 }
 
-async function addWord(input: string): Promise<void> {
-  if (!input) {
-    await sendMessage("Usage: /add <word>");
-    return;
-  }
+function recordAnswer(): void {
+  const wordId = required("WORD_ID");
+  const result = required("RESULT") as ReviewResult;
 
   const words = readWords();
-  if (words.some((word) => word.word.toLowerCase() === input.toLowerCase())) {
-    await sendMessage(`"${input}" is already on your list.`);
+  const word = words.find((candidate) => candidate.id === wordId);
+  if (!word) {
+    throw new Error(`Unknown word id ${wordId}`);
+  }
+
+  appendReview({
+    timestamp: new Date().toISOString(),
+    word_id: wordId,
+    type: "flashcard",
+    direction: "EN->CS",
+    result,
+    score: Number(process.env.SCORE) || 0,
+    notes: process.env.ANSWER ?? "",
+  });
+
+  const updated = applyReview(word, result);
+  writeWords(words.map((item) => (item.id === wordId ? updated : item)));
+
+  console.log(`Recorded ${result} for "${word.word}", next ${updated.next_review}.`);
+}
+
+function recordWord(): void {
+  const word = required("WORD");
+  const words = readWords();
+
+  if (words.some((item) => item.word.toLowerCase() === word.toLowerCase())) {
+    console.log(`"${word}" is already on the list.`);
     return;
   }
 
-  const details = await lookupWord(input);
   const nextId = String(
-    Math.max(0, ...words.map((word) => Number(word.id) || 0)) + 1
+    Math.max(0, ...words.map((item) => Number(item.id) || 0)) + 1
   );
 
   writeWords([
     ...words,
     {
       id: nextId,
-      word: input,
-      meaning: details.meaning,
-      example: details.example,
+      word,
+      meaning: process.env.MEANING ?? "",
+      example: process.env.EXAMPLE ?? "",
       state: "new",
       next_review: "",
       interval: 0,
@@ -59,49 +69,13 @@ async function addWord(input: string): Promise<void> {
     },
   ]);
 
-  await sendMessage(
-    `➕ ${input} — ${details.meaning}\n\n${details.example}`
-  );
+  console.log(`Added "${word}".`);
 }
 
-async function answerSession(answer: string): Promise<void> {
-  const sessions = readSessions();
-  const active = sessions.find((session) => session.status === "active");
-  if (!active) {
-    await sendMessage(
-      "No practice session is running. Start one with /session, or add a word with /add <word>."
-    );
-    return;
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} must be set`);
   }
-
-  const words = readWords();
-  const word = words.find((candidate) => candidate.id === active.word_id);
-  if (!word) {
-    throw new Error(`Session ${active.id} references unknown word ${active.word_id}`);
-  }
-
-  const evaluation = await evaluateAnswer(word, active.question, answer);
-
-  appendReview({
-    timestamp: new Date().toISOString(),
-    word_id: word.id,
-    type: "flashcard",
-    direction: "EN->CS",
-    result: evaluation.result,
-    score: evaluation.score,
-    notes: answer,
-  });
-
-  const updated = applyReview(word, evaluation.result);
-  writeWords(words.map((item) => (item.id === word.id ? updated : item)));
-  writeSessions(
-    sessions.map((session) =>
-      session.id === active.id ? { ...session, status: "completed" as const } : session
-    )
-  );
-
-  const mark = evaluation.result === "good" ? "✅" : "❌";
-  await sendMessage(
-    `${mark} ${evaluation.feedback}\n\nNext review: ${updated.next_review}`
-  );
+  return value;
 }

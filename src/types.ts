@@ -15,6 +15,8 @@ export type Word = {
   notes: string;
 };
 
+export type ReviewResult = "good" | "bad";
+
 export type Review = {
   timestamp: string;
   word_id: string;
@@ -23,18 +25,4 @@ export type Review = {
   result: ReviewResult;
   score: number;
   notes: string;
-};
-
-export type ReviewResult = "good" | "bad";
-
-export type SessionStatus = "active" | "completed";
-
-export type Session = {
-  id: string;
-  date: string;
-  word_id: string;
-  type: string;
-  status: SessionStatus;
-  turn: number;
-  question: string;
 };

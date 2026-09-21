@@ -2,11 +2,10 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { parse } from "csv-parse/sync";
 import { stringify } from "csv-stringify/sync";
-import type { Word, Review, Session } from "./types.js";
+import type { Word, Review } from "./types.js";
 
 const WORDS_PATH = "data/words.csv";
 const REVIEWS_PATH = "data/reviews.csv";
-const SESSIONS_PATH = "data/sessions.csv";
 
 const WORD_COLUMNS = [
   "id", "word", "meaning", "example", "state", "next_review",
@@ -15,10 +14,6 @@ const WORD_COLUMNS = [
 
 const REVIEW_COLUMNS = [
   "timestamp", "word_id", "type", "direction", "result", "score", "notes",
-] as const;
-
-const SESSION_COLUMNS = [
-  "id", "date", "word_id", "type", "status", "turn", "question",
 ] as const;
 
 function readRows(path: string): Record<string, string>[] {
@@ -51,22 +46,6 @@ export function readWords(): Word[] {
 
 export function writeWords(words: Word[]): void {
   writeRows(WORDS_PATH, WORD_COLUMNS, words);
-}
-
-export function readSessions(): Session[] {
-  return readRows(SESSIONS_PATH).map((row) => ({
-    id: row.id ?? "",
-    date: row.date ?? "",
-    word_id: row.word_id ?? "",
-    type: row.type ?? "flashcard",
-    status: (row.status || "active") as Session["status"],
-    turn: Number(row.turn) || 0,
-    question: row.question ?? "",
-  }));
-}
-
-export function writeSessions(sessions: Session[]): void {
-  writeRows(SESSIONS_PATH, SESSION_COLUMNS, sessions);
 }
 
 export function readReviews(): Review[] {

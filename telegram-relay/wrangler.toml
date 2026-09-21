@@ -2,8 +2,18 @@ name = "flashc-telegram-relay"
 main = "src/index.js"
 compatibility_date = "2024-09-19"
 
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "eb4f761a3500433e86645c4f93cc08ca"
+
+# UTC, so these are 08:00/13:00/19:00 local in summer, one hour earlier in winter.
+[triggers]
+crons = ["0 6,11,17 * * *"]
+
 # Secrets (set via `wrangler secret put`, not stored here):
-#   TELEGRAM_BOT_TOKEN   - Telegram bot token (used to verify webhook path + could be reused for replies)
+#   TELEGRAM_BOT_TOKEN      - Telegram bot token, used to send messages
+#   TELEGRAM_CHAT_ID        - the chat the bot talks to
 #   TELEGRAM_WEBHOOK_SECRET - random string, checked against Telegram's secret token header
-#   GITHUB_TOKEN         - GitHub fine-grained PAT with Contents: Read/write on the flashc repo
-#   GITHUB_REPO          - e.g. "KubaDotVaclavik/flashc"
+#   ANTHROPIC_API_KEY       - asks questions, grades answers, looks up new words
+#   GITHUB_TOKEN            - GitHub fine-grained PAT with Contents: Read/write on the flashc repo
+#   GITHUB_REPO             - e.g. "KubaDotVaclavik/flashc"
