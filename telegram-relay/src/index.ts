@@ -1,7 +1,28 @@
 import { parseCsv } from "./csv.js";
-import type { Word, AnswerPayload, AddPayload } from "../../shared/types.js";
 
 const ACTIVE_SESSION_KEY = "active_session";
+
+/** Only the columns of words.csv this Worker reads; the repo owns the full row. */
+type Word = {
+  id: string;
+  word: string;
+  meaning: string;
+  state: string;
+  next_review: string;
+};
+
+type AnswerPayload = {
+  word_id: string;
+  answer: string;
+  result: "good" | "bad";
+  score: number;
+};
+
+type AddPayload = {
+  word: string;
+  meaning: string;
+  example: string;
+};
 
 type Env = {
   SESSIONS: KVNamespace;
@@ -190,15 +211,8 @@ async function readWords(env: Env): Promise<Word[]> {
     id: row.id ?? "",
     word: row.word ?? "",
     meaning: row.meaning ?? "",
-    example: row.example ?? "",
-    state: (row.state || "new") as Word["state"],
+    state: row.state || "new",
     next_review: row.next_review ?? "",
-    interval: Number(row.interval) || 0,
-    ease: Number(row.ease) || 2.5,
-    successes: Number(row.successes) || 0,
-    failures: Number(row.failures) || 0,
-    tags: row.tags ?? "",
-    notes: row.notes ?? "",
   }));
 }
 
