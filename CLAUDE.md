@@ -76,8 +76,16 @@ GitHub Actions bude sloužit jako jednoduchý orchestrátor. Nemá běžet perma
 
 # Datový model
 
-Vše je v jediném souboru `data/words.csv`. Aktivní session žije v Cloudflare KV,
-ne na disku — historie procvičování se nikam neukládá, stačí konverzace v Telegramu.
+Každý chat má vlastní soubor `data/chat_<chat_id>.csv`, takže bot obslouží víc
+lidí i skupin, aniž by se jejich slovníky míchaly. Skupinová ID jsou záporná —
+prefix `chat_` brání tomu, aby název začínal pomlčkou, kterou si shellové
+nástroje vykládají jako přepínač.
+
+Kdo smí bota používat, určuje secret `TELEGRAM_CHAT_IDS` (ID oddělená čárkami).
+Zpráva odjinud se tiše ignoruje; CSV vznikne až prvním `/add` z povoleného chatu.
+
+Aktivní session žije v Cloudflare KV pod klíčem `active_session:<chat_id>`, ne na
+disku — historie procvičování se nikam neukládá, stačí konverzace v Telegramu.
 
 ```csv
 id,word,meaning,example,level_en_cs,level_cs_en,practiced_en_cs,practiced_cs_en,tags

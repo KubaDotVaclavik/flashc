@@ -1,7 +1,8 @@
 import { parseCsv } from "./csv.js";
 
-const ACTIVE_SESSION_KEY = "active_session";
-const IDLE_NOTICE_KEY = "idle_notice_day";
+const sessionKey = (chatId: string) => `active_session:${chatId}`;
+const idleKey = (chatId: string) => `idle_notice_day:${chatId}`;
+const wordsPath = (chatId: string) => `data/chat_${chatId}.csv`;
 
 const MAX_LEVEL = 8;
 const LEARNING_MAX = 5;
@@ -28,6 +29,7 @@ type Candidate = {
 };
 
 type AnswerPayload = {
+  chat_id: string;
   word_id: string;
   answer: string;
   result: "good" | "bad";
@@ -35,6 +37,7 @@ type AnswerPayload = {
 };
 
 type AddPayload = {
+  chat_id: string;
   word: string;
   meaning: string;
   example: string;
@@ -44,7 +47,7 @@ type AddPayload = {
 type Env = {
   SESSIONS: KVNamespace;
   TELEGRAM_BOT_TOKEN: string;
-  TELEGRAM_CHAT_ID: string;
+  TELEGRAM_CHAT_IDS: string;
   TELEGRAM_WEBHOOK_SECRET: string;
   GITHUB_TOKEN: string;
   GITHUB_REPO: string;
@@ -112,10 +115,10 @@ export default {
       return new Response("Bad request", { status: 400 });
     }
 
-    // Anyone who knows the bot's username can message it, and replies always go
-    // to our own chat — so a stranger could never read the answers, but could
-    // add words or answer an open question on our behalf.
-    if (String(update.message?.chat?.id ?? "") !== env.TELEGRAM_CHAT_ID) {
+    // Anyone who knows the bot's username can message it, so only the chats we
+    // were configured for are served. Everything else is dropped silently.
+    const chatId = String(update.message?.chat?.id ?? "");
+    if (!allowedChats(env).includes(chatId)) {
       return new Response("ignored", { status: 200 });
     }
 
@@ -126,57 +129,84 @@ export default {
 
     // Telegram retries a webhook it considers failed, which would double-grade
     // an answer. Returning 200 immediately and working in the background avoids that.
-    ctx.waitUntil(guard(handleMessage(text.trim(), env), env));
+    ctx.waitUntil(guard(handleMessage(text.trim(), chatId, env), chatId, env));
     return new Response("ok", { status: 200 });
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(guard(startSession(false, env), env));
+    // Guard each chat separately: one failing chat must not cancel the others.
+    ctx.waitUntil(
+      Promise.all(
+        allowedChats(env).map((chatId) =>
+          guard(startSession(false, chatId, env), chatId, env)
+        )
+      )
+    );
   },
 };
 
-async function guard(work: Promise<void>, env: Env): Promise<void> {
+function allowedChats(env: Env): string[] {
+  return env.TELEGRAM_CHAT_IDS.split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+}
+
+async function guard(work: Promise<void>, chatId: string, env: Env): Promise<void> {
   try {
     await work;
   } catch (error) {
     console.error(error);
-    await sendMessage("Something went wrong. Please try again.", env).catch(() => {});
+    await sendMessage("Something went wrong. Please try again.", chatId, env).catch(
+      () => {}
+    );
   }
 }
 
-async function handleMessage(text: string, env: Env): Promise<void> {
+async function handleMessage(text: string, chatId: string, env: Env): Promise<void> {
   if (text === "/add" || text.startsWith("/add ")) {
-    await addWord(text.slice(4).trim(), env);
+    await addWord(text.slice(4).trim(), chatId, env);
   } else if (text === "/session") {
-    await startSession(true, env);
+    await startSession(true, chatId, env);
   } else {
-    await gradeAnswer(text, env);
+    await gradeAnswer(text, chatId, env);
   }
 }
 
-async function startSession(announceIdle: boolean, env: Env): Promise<void> {
-  const active = await env.SESSIONS.get<ActiveSession>(ACTIVE_SESSION_KEY, "json");
+async function startSession(
+  announceIdle: boolean,
+  chatId: string,
+  env: Env
+): Promise<void> {
+  const active = await env.SESSIONS.get<ActiveSession>(sessionKey(chatId), "json");
   if (active) {
     if (announceIdle) {
       const open = active.questions[active.current];
       if (open) {
-        await sendMessage(`You still have an open question:\n\n${open.question}`, env);
+        await sendMessage(
+          `You still have an open question:\n\n${open.question}`,
+          chatId,
+          env
+        );
       }
     }
     return;
   }
 
-  const candidates = selectCandidates(await readWords(env), env);
+  const words = await readWords(chatId, env);
+  const candidates = selectCandidates(words, env);
   if (candidates.length === 0) {
     // On a schedule this would repeat at every cron tick, so the reminder is
     // capped at one a day. Asking directly always gets an answer.
     const today = new Date().toISOString().slice(0, 10);
-    if (!announceIdle && (await env.SESSIONS.get(IDLE_NOTICE_KEY)) === today) {
+    if (!announceIdle && (await env.SESSIONS.get(idleKey(chatId))) === today) {
       return;
     }
-    await env.SESSIONS.put(IDLE_NOTICE_KEY, today);
+    await env.SESSIONS.put(idleKey(chatId), today);
     await sendMessage(
-      "Nothing to practise right now — everything you know is still resting. Add a word with /add <word>.",
+      words.length === 0
+        ? "You have no words yet. Add your first one with /add <word>."
+        : "Nothing to practise right now — everything you know is still resting. Add a word with /add <word>.",
+      chatId,
       env
     );
     return;
@@ -194,19 +224,20 @@ async function startSession(announceIdle: boolean, env: Env): Promise<void> {
   }
 
   const session: ActiveSession = { questions, current: 0 };
-  await env.SESSIONS.put(ACTIVE_SESSION_KEY, JSON.stringify(session));
+  await env.SESSIONS.put(sessionKey(chatId), JSON.stringify(session));
 
   const first = questions[0]!;
   const prefix = questions.length > 1 ? `(1/${questions.length}) ` : "";
-  await sendMessage(prefix + first.question, env);
+  await sendMessage(prefix + first.question, chatId, env);
 }
 
-async function gradeAnswer(answer: string, env: Env): Promise<void> {
-  const session = await env.SESSIONS.get<ActiveSession>(ACTIVE_SESSION_KEY, "json");
+async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<void> {
+  const session = await env.SESSIONS.get<ActiveSession>(sessionKey(chatId), "json");
   const open = session?.questions[session.current];
   if (!session || !open) {
     await sendMessage(
       "No practice session is running. Start one with /session, or add a word with /add <word>.",
+      chatId,
       env
     );
     return;
@@ -217,6 +248,7 @@ async function gradeAnswer(answer: string, env: Env): Promise<void> {
   // Record the result before advancing the session: if the dispatch fails, the
   // question stays open and the answer can be retried rather than silently lost.
   const payload: AnswerPayload = {
+    chat_id: chatId,
     word_id: open.word_id,
     answer,
     result: evaluation.result,
@@ -228,52 +260,58 @@ async function gradeAnswer(answer: string, env: Env): Promise<void> {
   const done = next >= session.questions.length;
 
   if (done) {
-    await env.SESSIONS.delete(ACTIVE_SESSION_KEY);
+    await env.SESSIONS.delete(sessionKey(chatId));
   } else {
     await env.SESSIONS.put(
-      ACTIVE_SESSION_KEY,
+      sessionKey(chatId),
       JSON.stringify({ ...session, current: next })
     );
   }
 
   const mark = evaluation.result === "good" ? "✅" : "❌";
-  await sendMessage(`${mark} ${evaluation.feedback}`, env);
+  await sendMessage(`${mark} ${evaluation.feedback}`, chatId, env);
 
   if (done) {
-    // words.csv still lacks this session's answers — the Action commits them a
+    // The CSV still lacks this session's answers — the Action commits them a
     // few seconds from now — so the report is one session behind. Close enough
     // for a nudge about the size of each band.
-    await sendMessage(buildReport(await readWords(env), env), env);
+    await sendMessage(buildReport(await readWords(chatId, env), env), chatId, env);
   } else {
     const upcoming = session.questions[next]!;
     await sendMessage(
       `(${next + 1}/${session.questions.length}) ${upcoming.question}`,
+      chatId,
       env
     );
   }
 }
 
-async function addWord(word: string, env: Env): Promise<void> {
+async function addWord(word: string, chatId: string, env: Env): Promise<void> {
   if (!word) {
-    await sendMessage("Usage: /add <word>", env);
+    await sendMessage("Usage: /add <word>", chatId, env);
     return;
   }
 
-  const words = await readWords(env);
+  const words = await readWords(chatId, env);
   if (words.some((item) => item.word.toLowerCase() === word.toLowerCase())) {
-    await sendMessage(`"${word}" is already on your list.`, env);
+    await sendMessage(`"${word}" is already on your list.`, chatId, env);
     return;
   }
 
   const details = await lookupWord(word, env);
   const payload: AddPayload = {
+    chat_id: chatId,
     word,
     meaning: details.meaning,
     example: details.example,
     start_level: config(env, "START_LEVEL", 2),
   };
   await dispatch("flashc-add", payload, env);
-  await sendMessage(`➕ ${word} — ${details.meaning}\n\n${details.example}`, env);
+  await sendMessage(
+    `➕ ${word} — ${details.meaning}\n\n${details.example}`,
+    chatId,
+    env
+  );
 }
 
 function levelOf(word: Word, direction: Direction): number {
@@ -375,9 +413,10 @@ export function buildReport(words: Word[], env: Env): string {
   return lines.join("\n");
 }
 
-async function readWords(env: Env): Promise<Word[]> {
+async function readWords(chatId: string, env: Env): Promise<Word[]> {
+  const path = wordsPath(chatId);
   const response = await fetch(
-    `https://api.github.com/repos/${env.GITHUB_REPO}/contents/data/words.csv`,
+    `https://api.github.com/repos/${env.GITHUB_REPO}/contents/${path}`,
     {
       headers: {
         Authorization: `Bearer ${env.GITHUB_TOKEN}`,
@@ -387,8 +426,15 @@ async function readWords(env: Env): Promise<Word[]> {
     }
   );
 
+  // A chat that has never added a word has no file yet. Only 404 means that —
+  // a 401 or 500 must still throw, or a broken token would look like an empty
+  // vocabulary and quietly reset someone's progress.
+  if (response.status === 404) {
+    return [];
+  }
+
   if (!response.ok) {
-    throw new Error(`Reading words.csv failed: ${response.status} ${await response.text()}`);
+    throw new Error(`Reading ${path} failed: ${response.status} ${await response.text()}`);
   }
 
   return parseCsv(await response.text()).map((row) => ({
@@ -427,13 +473,13 @@ async function dispatch(
   }
 }
 
-async function sendMessage(text: string, env: Env): Promise<void> {
+async function sendMessage(text: string, chatId: string, env: Env): Promise<void> {
   const response = await fetch(
     `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text }),
+      body: JSON.stringify({ chat_id: chatId, text }),
     }
   );
 

@@ -22,6 +22,7 @@ jobs:
       - run: npx tsx src/reply.ts
         env:
           EVENT_TYPE: ${{ github.event.action }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
           WORD_ID: ${{ github.event.client_payload.word_id }}
           RESULT: ${{ github.event.client_payload.result }}
           DIRECTION: ${{ github.event.client_payload.direction }}

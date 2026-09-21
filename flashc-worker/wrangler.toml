@@ -13,6 +13,9 @@ crons = ["0 6,11,17 * * *"]
 # Level steps, penalties and band boundaries are constants in the code — they
 # depend on each other and are not meant to be tuned independently.
 [vars]
+# Chats allowed to use the bot; each gets its own data/chat_<id>.csv.
+# Not a secret — knowing a chat id grants nothing without the account itself.
+TELEGRAM_CHAT_IDS = "8605045164"
 START_LEVEL = "2"        # level a new word starts at (0-2)
 WORDS_PER_SESSION = "1"  # questions asked per session
 LEARNING_POOL = "10"     # weakest learning candidates entering the draw
@@ -25,7 +28,6 @@ REVIEW_WARN = "60"       # warn above this many in Known+Mastered
 
 # Secrets (set via `wrangler secret put`, not stored here):
 #   TELEGRAM_BOT_TOKEN      - Telegram bot token, used to send messages
-#   TELEGRAM_CHAT_ID        - the chat the bot talks to
 #   TELEGRAM_WEBHOOK_SECRET - random string, checked against Telegram's secret token header
 #   ANTHROPIC_API_KEY       - asks questions, grades answers, looks up new words
 #   GITHUB_TOKEN            - GitHub fine-grained PAT with Contents: Read/write on the flashc repo
