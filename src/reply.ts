@@ -58,7 +58,7 @@ function recordWord(): void {
       level_cs_en: startLevel,
       practiced_en_cs: "",
       practiced_cs_en: "",
-      tags: "",
+      tags: process.env.TOPIC ?? "",
     },
   ]);
 

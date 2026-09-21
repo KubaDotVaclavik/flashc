@@ -42,6 +42,14 @@ type AddPayload = {
   meaning: string;
   example: string;
   start_level: number;
+  topic: string;
+};
+
+/** A subject area that steers how Claude explains a word. Configured in TOPICS. */
+type Topic = {
+  key: string;
+  label: string;
+  instruction: string;
 };
 
 type Env = {
@@ -52,6 +60,7 @@ type Env = {
   GITHUB_TOKEN: string;
   GITHUB_REPO: string;
   ANTHROPIC_API_KEY?: string;
+  TOPICS?: string;
   START_LEVEL?: string;
   WORDS_PER_SESSION?: string;
   LEARNING_POOL?: string;
@@ -87,6 +96,43 @@ type WordDetails = {
   example: string;
 };
 
+const FALLBACK_TOPIC: Topic = {
+  key: "general",
+  label: "General",
+  instruction:
+    "Explain the everyday meaning and write a natural example sentence from ordinary life.",
+};
+
+/**
+ * TOPICS is hand-written JSON in wrangler.toml, so a typo there must not take
+ * /add down with it — a broken list degrades to the single general topic.
+ */
+function topics(env: Env): Topic[] {
+  if (!env.TOPICS) return [FALLBACK_TOPIC];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(env.TOPICS);
+  } catch (error) {
+    console.error("TOPICS is not valid JSON, falling back to general.", error);
+    return [FALLBACK_TOPIC];
+  }
+
+  if (!Array.isArray(parsed)) {
+    console.error("TOPICS must be an array, falling back to general.");
+    return [FALLBACK_TOPIC];
+  }
+
+  const valid = parsed.filter(
+    (item): item is Topic =>
+      typeof item?.key === "string" &&
+      typeof item?.label === "string" &&
+      typeof item?.instruction === "string"
+  );
+
+  return valid.length > 0 ? valid : [FALLBACK_TOPIC];
+}
+
 function config(env: Env, name: keyof Env, fallback: number): number {
   const raw = env[name];
   const value = Number(raw);
@@ -114,6 +160,11 @@ export default {
         chat?: { id?: unknown };
         reply_to_message?: { text?: unknown };
       };
+      callback_query?: {
+        id?: unknown;
+        data?: unknown;
+        message?: { text?: unknown; chat?: { id?: unknown } };
+      };
     };
     try {
       update = await request.json();
@@ -121,11 +172,39 @@ export default {
       return new Response("Bad request", { status: 400 });
     }
 
+    const callback = update.callback_query;
+
     // Anyone who knows the bot's username can message it, so only the chats we
     // were configured for are served. Everything else is dropped silently.
-    const chatId = String(update.message?.chat?.id ?? "");
+    const chatId = String(
+      (callback ? callback.message?.chat?.id : update.message?.chat?.id) ?? ""
+    );
     if (!allowedChats(env).includes(chatId)) {
       return new Response("ignored", { status: 200 });
+    }
+
+    // Telegram retries a webhook it considers failed, which would double-grade
+    // an answer. Returning 200 immediately and working in the background avoids that.
+    if (callback) {
+      const data = callback.data;
+      const prompt = callback.message?.text;
+      if (typeof data !== "string") {
+        return new Response("ignored", { status: 200 });
+      }
+      ctx.waitUntil(
+        guard(
+          handleCallback(
+            data,
+            typeof prompt === "string" ? prompt : "",
+            String(callback.id ?? ""),
+            chatId,
+            env
+          ),
+          chatId,
+          env
+        )
+      );
+      return new Response("ok", { status: 200 });
     }
 
     const text = update.message?.text;
@@ -135,8 +214,6 @@ export default {
 
     const repliedTo = update.message?.reply_to_message?.text;
 
-    // Telegram retries a webhook it considers failed, which would double-grade
-    // an answer. Returning 200 immediately and working in the background avoids that.
     ctx.waitUntil(
       guard(
         handleMessage(
@@ -182,6 +259,9 @@ async function guard(work: Promise<void>, chatId: string, env: Env): Promise<voi
 }
 
 const ADD_PROMPT = "Which word do you want to add?";
+const TOPIC_PREFIX = "Topic for ";
+const TOPIC_SUFFIX = "?";
+const CALLBACK_PREFIX = "topic:";
 
 async function handleMessage(
   text: string,
@@ -193,11 +273,11 @@ async function handleMessage(
   // asks for the word and reads it from the reply. Matching on the prompt text
   // keeps this stateless, and keeps an open practice question undisturbed.
   if (repliedTo === ADD_PROMPT) {
-    await addWord(text, chatId, env);
+    await askForTopic(text, chatId, env);
   } else if (text === "/add") {
     await promptForWord(chatId, env);
   } else if (text.startsWith("/add ")) {
-    await addWord(text.slice(4).trim(), chatId, env);
+    await askForTopic(text.slice(4).trim(), chatId, env);
   } else if (text === "/session") {
     await startSession(true, chatId, env);
   } else {
@@ -207,6 +287,70 @@ async function handleMessage(
 
 function promptForWord(chatId: string, env: Env): Promise<void> {
   return sendMessage(ADD_PROMPT, chatId, env, { force_reply: true });
+}
+
+/**
+ * Second step of /add: the word is known, the topic is not. The word rides in
+ * the prompt's own text rather than in callback_data, which Telegram caps at
+ * 64 bytes — a long word would be truncated there, and silently so.
+ */
+async function askForTopic(word: string, chatId: string, env: Env): Promise<void> {
+  if (!word) {
+    await promptForWord(chatId, env);
+    return;
+  }
+
+  const known = await readWords(chatId, env);
+  if (known.some((item) => item.word.toLowerCase() === word.toLowerCase())) {
+    await sendMessage(`"${word}" is already on your list.`, chatId, env);
+    return;
+  }
+
+  const choices = topics(env);
+  if (choices.length === 1) {
+    await addWord(word, choices[0]!, chatId, env);
+    return;
+  }
+
+  await sendMessage(`${TOPIC_PREFIX}${word}${TOPIC_SUFFIX}`, chatId, env, {
+    inline_keyboard: [
+      choices.map((topic) => ({
+        text: topic.label,
+        callback_data: `${CALLBACK_PREFIX}${topic.key}`,
+      })),
+    ],
+  });
+}
+
+async function handleCallback(
+  data: string,
+  promptText: string,
+  callbackId: string,
+  chatId: string,
+  env: Env
+): Promise<void> {
+  // Telegram shows a loading spinner on the button until this is acknowledged.
+  await answerCallbackQuery(callbackId, env).catch(() => {});
+
+  if (!data.startsWith(CALLBACK_PREFIX)) return;
+
+  const topic = topics(env).find(
+    (candidate) => candidate.key === data.slice(CALLBACK_PREFIX.length)
+  );
+  const word =
+    promptText.startsWith(TOPIC_PREFIX) && promptText.endsWith(TOPIC_SUFFIX)
+      ? promptText.slice(TOPIC_PREFIX.length, -TOPIC_SUFFIX.length)
+      : "";
+
+  // Both can only fail if TOPICS changed between the prompt and the tap, or if
+  // the prompt was edited away. Saying so beats adding a word under a topic
+  // that no longer exists.
+  if (!topic || !word) {
+    await sendMessage("That choice expired. Try /add again.", chatId, env);
+    return;
+  }
+
+  await addWord(word, topic, chatId, env);
 }
 
 async function startSession(
@@ -323,29 +467,24 @@ async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<vo
   }
 }
 
-async function addWord(word: string, chatId: string, env: Env): Promise<void> {
-  if (!word) {
-    await promptForWord(chatId, env);
-    return;
-  }
-
-  const words = await readWords(chatId, env);
-  if (words.some((item) => item.word.toLowerCase() === word.toLowerCase())) {
-    await sendMessage(`"${word}" is already on your list.`, chatId, env);
-    return;
-  }
-
-  const details = await lookupWord(word, env);
+async function addWord(
+  word: string,
+  topic: Topic,
+  chatId: string,
+  env: Env
+): Promise<void> {
+  const details = await lookupWord(word, topic, env);
   const payload: AddPayload = {
     chat_id: chatId,
     word,
     meaning: details.meaning,
     example: details.example,
     start_level: config(env, "START_LEVEL", 2),
+    topic: topic.key,
   };
   await dispatch("flashc-add", payload, env);
   await sendMessage(
-    `➕ ${word} — ${details.meaning}\n\n${details.example}`,
+    `➕ ${word} — ${details.meaning}\n[${topic.label}]\n\n${details.example}`,
     chatId,
     env
   );
@@ -510,6 +649,18 @@ async function dispatch(
   }
 }
 
+async function answerCallbackQuery(callbackId: string, env: Env): Promise<void> {
+  if (!callbackId) return;
+  await fetch(
+    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callback_query_id: callbackId }),
+    }
+  );
+}
+
 async function sendMessage(
   text: string,
   chatId: string,
@@ -655,12 +806,13 @@ function evaluateAnswer(
   );
 }
 
-function lookupWord(word: string, env: Env): Promise<WordDetails> {
+function lookupWord(word: string, topic: Topic, env: Env): Promise<WordDetails> {
   return callClaude<WordDetails>(
     {
       system:
         "You help a Czech learner build an English vocabulary list. " +
-        "Give the Czech meaning and one natural example sentence.",
+        "Give the Czech meaning and one natural example sentence. " +
+        topic.instruction,
       schema: {
         type: "object",
         properties: {
@@ -672,7 +824,7 @@ function lookupWord(word: string, env: Env): Promise<WordDetails> {
       },
       user: `Word: ${word}`,
       stub: () => ({
-        meaning: `[stub] meaning of ${word}`,
+        meaning: `[stub] ${topic.key} meaning of ${word}`,
         example: `[stub] This is an example with ${word}.`,
       }),
     },

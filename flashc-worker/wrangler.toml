@@ -16,6 +16,16 @@ crons = ["0 6,11,17 * * *"]
 # Chats allowed to use the bot; each gets its own data/chat_<id>.csv.
 # Not a secret — knowing a chat id grants nothing without the account itself.
 TELEGRAM_CHAT_IDS = "8605045164"
+# Topics offered when adding a word. The key lands in the CSV's tags column,
+# the label is the button, and the instruction steers Claude's meaning/example.
+TOPICS = """
+[
+  { "key": "it", "label": "IT",
+    "instruction": "The learner works in software development. Explain the meaning as it is used in IT, and write an example sentence from a developer's working life." },
+  { "key": "general", "label": "General",
+    "instruction": "Explain the everyday meaning and write a natural example sentence from ordinary life." }
+]
+"""
 START_LEVEL = "2"        # level a new word starts at (0-2)
 WORDS_PER_SESSION = "1"  # questions asked per session
 LEARNING_POOL = "10"     # weakest learning candidates entering the draw

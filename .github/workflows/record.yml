@@ -30,6 +30,7 @@ jobs:
           MEANING: ${{ github.event.client_payload.meaning }}
           EXAMPLE: ${{ github.event.client_payload.example }}
           START_LEVEL: ${{ github.event.client_payload.start_level }}
+          TOPIC: ${{ github.event.client_payload.topic }}
 
       - name: Commit data changes
         run: |

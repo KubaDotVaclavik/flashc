@@ -104,11 +104,26 @@ Příklad:
 | `level_cs_en` | úroveň 0–8 pro směr CS→EN (vidíš `neochotný`, říkáš anglické slovo) |
 | `practiced_en_cs` | datum posledního procvičení v tomto směru |
 | `practiced_cs_en` | totéž pro druhý směr |
+| `tags` | téma slova, vybrané při `/add` (např. `it`, `general`) |
 
 Každý směr se učí nezávisle: CS→EN (produkce) je těžší než EN→CS (rozpoznání),
 takže jedna společná úroveň by slabší směr schovala za silnější.
 
 Slovo se z učení vyřadí smazáním řádku.
+
+## Témata
+
+Seznam témat je JSON v `TOPICS` ve `wrangler.toml`; každé má `key` (jde do
+`tags`), `label` (text tlačítka) a `instruction` pro Claude.
+
+`/add` proto běží ve dvou krocích: nejdřív slovo, pak téma přes inline keyboard.
+Claude se volá až po výběru — dřív nemá podle čeho `meaning` a `example`
+přizpůsobit. Slovo čeká mezi kroky v textu výzvy („Topic for *slovo*?"), ne
+v KV: `callback_data` má limit 64 bajtů a delší slovo by tiše uťalo.
+
+Téma ovlivňuje jen generování při `/add`. Výběr slov do session na něm
+nezávisí — filtr podle tématu by znamenal, že se slova z ostatních témat
+přestanou objevovat úplně.
 
 ---
 
