@@ -61,6 +61,7 @@ type Env = {
   GITHUB_REPO: string;
   ANTHROPIC_API_KEY?: string;
   CLAUDE_MODEL?: string;
+  CLAUDE_MODEL_FAST?: string;
   TOPICS?: string;
   START_LEVEL?: string;
   WORDS_PER_SESSION?: string;
@@ -742,10 +743,19 @@ type ClaudeCall<T> = {
   system: string;
   user: string;
   schema?: Record<string, unknown>;
+  /**
+   * Asking and grading are small, mechanical jobs and go to the cheap model;
+   * writing a word's meaning and example is the one that benefits from the
+   * better one. Roughly two thirds off the running cost.
+   */
+  model: "fast" | "good";
   stub: () => T;
 };
 
-async function callClaude<T>({ system, user, schema, stub }: ClaudeCall<T>, env: Env): Promise<T> {
+async function callClaude<T>(
+  { system, user, schema, model, stub }: ClaudeCall<T>,
+  env: Env
+): Promise<T> {
   if (!env.ANTHROPIC_API_KEY) {
     console.warn("ANTHROPIC_API_KEY not set — using stubbed Claude response.");
     return stub();
@@ -764,8 +774,13 @@ async function callClaude<T>({ system, user, schema, stub }: ClaudeCall<T>, env:
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: env.CLAUDE_MODEL ?? "claude-sonnet-5",
-      max_tokens: 1000,
+      model:
+        model === "fast"
+          ? env.CLAUDE_MODEL_FAST ?? "claude-haiku-4-5-20251001"
+          : env.CLAUDE_MODEL ?? "claude-sonnet-5",
+      // Replies here are a question, a sentence of feedback, or a short JSON
+      // object — a few dozen tokens. The old 1000 was never approached.
+      max_tokens: 300,
       output_config: outputConfig,
       system,
       messages: [{ role: "user", content: user }],
@@ -807,6 +822,7 @@ function askQuestion(word: Word, direction: Direction, env: Env): Promise<string
 
   return callClaude<string>(
     {
+      model: "fast",
       system,
       // The example sentence contains the English word, so it is withheld when
       // that word is what the learner has to produce.
@@ -834,6 +850,7 @@ function evaluateAnswer(
 
   return callClaude<Evaluation>(
     {
+      model: "fast",
       system:
         "You grade a Czech learner's flashcard answer about an English word. " +
         `${expecting} The expected answer is given to you; grade against it. ` +
@@ -885,6 +902,8 @@ function evaluateAnswer(
 function lookupWord(input: string, topic: Topic, env: Env): Promise<WordDetails> {
   return callClaude<WordDetails>(
     {
+      // The one call whose output is stored and read for years.
+      model: "good",
       system:
         "You help a Czech learner build an English vocabulary list. " +
         "The input is one word or phrase, in English or in Czech. " +

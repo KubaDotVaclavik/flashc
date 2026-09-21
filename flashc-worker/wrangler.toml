@@ -16,10 +16,12 @@ crons = ["0 6,11,17 * * *"]
 # Chats allowed to use the bot; each gets its own data/chat_<id>.csv.
 # Not a secret — knowing a chat id grants nothing without the account itself.
 TELEGRAM_CHAT_IDS = "8605045164"
-# Flashcards are a small job — asking, grading, looking a word up — so the
-# cheaper, faster model is the right default. Opus is available per-workspace
-# rate limits in the Anthropic Console, which must allow whatever is set here.
-CLAUDE_MODEL = "claude-sonnet-5"
+# Asking and grading are mechanical and run several times a day, so they go to
+# the cheap model. Looking a word up is the one call whose output is stored and
+# read for years, so it gets the better one. Per-workspace rate limits in the
+# Anthropic Console must allow both models named here.
+CLAUDE_MODEL = "claude-sonnet-5"            # writes meaning and example
+CLAUDE_MODEL_FAST = "claude-haiku-4-5-20251001"  # asks and grades
 
 # Topics offered when adding a word. The key lands in the CSV's tags column,
 # the label is the button, and the instruction steers Claude's meaning/example.
