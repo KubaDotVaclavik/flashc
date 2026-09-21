@@ -8,7 +8,7 @@ const WORD_COLUMNS = [
   "id", "word", "meaning", "example",
   "level_en_cs", "level_cs_en",
   "practiced_en_cs", "practiced_cs_en",
-  "tags",
+  "topic",
 ] as const;
 
 export function wordsPath(chatId: string): string {
@@ -35,7 +35,7 @@ export function readWords(path: string): Word[] {
     level_cs_en: Number(row.level_cs_en) || 0,
     practiced_en_cs: row.practiced_en_cs ?? "",
     practiced_cs_en: row.practiced_cs_en ?? "",
-    tags: row.tags ?? "",
+    topic: row.topic ?? "",
   }));
 }
 

@@ -11,5 +11,5 @@ export type Word = {
   level_cs_en: number;
   practiced_en_cs: string;
   practiced_cs_en: string;
-  tags: string;
+  topic: string;
 };
