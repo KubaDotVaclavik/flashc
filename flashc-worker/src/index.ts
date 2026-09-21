@@ -166,7 +166,7 @@ export default {
       callback_query?: {
         id?: unknown;
         data?: unknown;
-        message?: { text?: unknown; chat?: { id?: unknown } };
+        message?: { message_id?: unknown; text?: unknown; chat?: { id?: unknown } };
       };
     };
     try {
@@ -197,9 +197,12 @@ export default {
       ctx.waitUntil(
         guard(
           handleCallback(
-            data,
-            typeof prompt === "string" ? prompt : "",
-            String(callback.id ?? ""),
+            {
+              data,
+              promptText: typeof prompt === "string" ? prompt : "",
+              callbackId: String(callback.id ?? ""),
+              messageId: Number(callback.message?.message_id ?? 0),
+            },
             chatId,
             env
           ),
@@ -335,10 +338,15 @@ async function askForTopic(word: string, chatId: string, env: Env): Promise<void
   });
 }
 
+type CallbackTap = {
+  data: string;
+  promptText: string;
+  callbackId: string;
+  messageId: number;
+};
+
 async function handleCallback(
-  data: string,
-  promptText: string,
-  callbackId: string,
+  { data, promptText, callbackId, messageId }: CallbackTap,
   chatId: string,
   env: Env
 ): Promise<void> {
@@ -346,6 +354,13 @@ async function handleCallback(
   await answerCallbackQuery(callbackId, env).catch(() => {});
 
   if (!data.startsWith(CALLBACK_PREFIX)) return;
+
+  // Looking the word up takes a second or two, and the buttons stay tappable
+  // the whole time, which invites a second tap and a second word. Taking them
+  // away first makes the first tap the only one that can do anything: a later
+  // tap on a cached keyboard finds no buttons to edit and stops here.
+  const claimed = await clearButtons(messageId, chatId, env);
+  if (!claimed) return;
 
   const topic = topics(env).find(
     (candidate) => candidate.key === data.slice(CALLBACK_PREFIX.length)
@@ -362,6 +377,16 @@ async function handleCallback(
     await sendMessage("That choice expired. Try /add again.", chatId, env);
     return;
   }
+
+  // Looking the word up runs for a second or two with nothing on screen, which
+  // is the other half of why the buttons got tapped twice. Restating the choice
+  // shows the tap landed.
+  await editMessage(
+    `${TOPIC_PREFIX}${word}${TOPIC_SUFFIX} ${topic.label} — looking it up…`,
+    messageId,
+    chatId,
+    env
+  );
 
   await addWord(word, topic, chatId, env);
 }
@@ -700,6 +725,65 @@ async function dispatch(
 
   if (!response.ok) {
     throw new Error(`GitHub dispatch failed: ${response.status} ${await response.text()}`);
+  }
+}
+
+/**
+ * Removes a message's buttons, and reports whether this call is the one that
+ * removed them. Telegram rejects an edit that changes nothing with "message is
+ * not modified", which is exactly the second tap: the keyboard is already gone,
+ * so that tap has lost the race and must not act.
+ */
+async function clearButtons(
+  messageId: number,
+  chatId: string,
+  env: Env
+): Promise<boolean> {
+  if (!messageId) return true;
+
+  const response = await fetch(
+    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageReplyMarkup`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [] },
+      }),
+    }
+  );
+
+  if (response.ok) return true;
+
+  const body = await response.text();
+  if (body.includes("message is not modified")) return false;
+
+  // Any other failure (a deleted message, a network blip) must not silently
+  // swallow the tap: better to add the word twice than not at all.
+  console.error(`editMessageReplyMarkup failed: ${response.status} ${body}`);
+  return true;
+}
+
+/** Rewrites a message in place. Cosmetic, so a failure must not stop the work. */
+async function editMessage(
+  text: string,
+  messageId: number,
+  chatId: string,
+  env: Env
+): Promise<void> {
+  if (!messageId) return;
+  try {
+    await fetch(
+      `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, message_id: messageId, text }),
+      }
+    );
+  } catch (error) {
+    console.error("editMessageText failed", error);
   }
 }
 
