@@ -158,15 +158,18 @@ export default {
       return new Response("Forbidden", { status: 403 });
     }
 
+    type Sender = { id?: unknown; username?: unknown };
     let update: {
       message?: {
         text?: unknown;
+        from?: Sender;
         chat?: { id?: unknown };
         reply_to_message?: { text?: unknown };
       };
       callback_query?: {
         id?: unknown;
         data?: unknown;
+        from?: Sender;
         message?: { message_id?: unknown; text?: unknown; chat?: { id?: unknown } };
       };
     };
@@ -192,6 +195,15 @@ export default {
       (callback ? callback.message?.chat?.id : update.message?.chat?.id) ?? ""
     );
     if (!allowedChats(env).includes(chatId)) {
+      // Anyone who knows the bot's username can reach this, so it is worth
+      // seeing. Logged unconditionally — a stranger trying the bot is a
+      // security event, not debugging — but without their message: the id is
+      // what identifies them, and it is what TELEGRAM_CHAT_IDS would need.
+      const from = callback ? callback.from : update.message?.from;
+      console.warn(
+        `Ignored a message from chat ${chatId || "(unknown)"}` +
+          ` (user ${String(from?.id ?? "unknown")}, @${String(from?.username ?? "-")}).`
+      );
       return new Response("ignored", { status: 200 });
     }
 
