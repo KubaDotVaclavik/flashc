@@ -845,7 +845,18 @@ async function callClaude<T>(
     return stub();
   }
 
-  const outputConfig: Record<string, unknown> = { effort: "low" };
+  const modelId =
+    model === "fast"
+      ? env.CLAUDE_MODEL_FAST ?? "claude-haiku-4-5-20251001"
+      : env.CLAUDE_MODEL ?? "claude-sonnet-5";
+
+  const outputConfig: Record<string, unknown> = {};
+  // Haiku 4.5 rejects the effort parameter outright, so it is sent only to the
+  // models that have it. Its absence costs nothing here: these replies are a
+  // few dozen tokens either way.
+  if (!/haiku/i.test(modelId)) {
+    outputConfig.effort = "low";
+  }
   if (schema) {
     outputConfig.format = { type: "json_schema", schema };
   }
@@ -858,14 +869,15 @@ async function callClaude<T>(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model:
-        model === "fast"
-          ? env.CLAUDE_MODEL_FAST ?? "claude-haiku-4-5-20251001"
-          : env.CLAUDE_MODEL ?? "claude-sonnet-5",
+      model: modelId,
       // Replies here are a question, a sentence of feedback, or a short JSON
       // object — a few dozen tokens. The old 1000 was never approached.
       max_tokens: 300,
-      output_config: outputConfig,
+      // Asking a question on Haiku leaves nothing to configure, and an empty
+      // object is not worth sending.
+      ...(Object.keys(outputConfig).length > 0
+        ? { output_config: outputConfig }
+        : {}),
       system,
       messages: [{ role: "user", content: user }],
     }),
