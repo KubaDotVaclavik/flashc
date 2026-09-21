@@ -31,7 +31,6 @@ type Candidate = {
 type AnswerPayload = {
   chat_id: string;
   word_id: string;
-  answer: string;
   result: "good" | "bad";
   direction: Direction;
 };
@@ -511,7 +510,6 @@ async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<vo
   const payload: AnswerPayload = {
     chat_id: chatId,
     word_id: open.word_id,
-    answer,
     result: evaluation.result,
     direction: open.direction,
   };
