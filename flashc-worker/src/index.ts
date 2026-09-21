@@ -836,8 +836,19 @@ function evaluateAnswer(
     {
       system:
         "You grade a Czech learner's flashcard answer about an English word. " +
-        `${expecting} Accept synonyms and minor typos. ` +
-        "Mark 'bad' only if the meaning is wrong or missing. " +
+        `${expecting} The expected answer is given to you; grade against it. ` +
+        // Grammar is not what a flashcard tests, but spelling is: a learner who
+        // is never told about a typo keeps making it.
+        "Accept an answer whose form differs but whose word is right: a " +
+        "different gender, number, case or verb aspect, a missing diacritic, " +
+        "or a different capitalisation. Accept a genuine synonym, even one " +
+        "not listed, and accept an answer that gives only one of several " +
+        "listed meanings. " +
+        "Do not accept a misspelling. If the word is spelled wrong, mark it " +
+        "'bad' and show the correct spelling, even when you can tell what was " +
+        "meant. " +
+        "Mark 'bad' when the answer is wrong, missing, or says nothing — " +
+        `"I don't know" is 'bad'. ` +
         "Write the feedback in English, and confirm the correct answer briefly.",
       schema: {
         type: "object",
