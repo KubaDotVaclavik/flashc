@@ -22,10 +22,10 @@ Nechci zatím budovat obecný „second brain“ ani složitou knowledge-base in
 
 Preferovaný stack:
 
-* **GitHub** — repository a úložiště dat
+* **GitHub** — repository a úložiště dat (přes Contents API)
 * **CSV** — primární databáze
-* **GitHub Actions** — serverless execution / scheduling
-* **TypeScript / Node.js** — implementace
+* **Cloudflare Worker** — veškerá logika i scheduling (cron triggers)
+* **TypeScript** — implementace
 * **Claude API** — AI tutor a vyhodnocování odpovědí
 * **Telegram Bot API** — komunikace s uživatelem
 
@@ -40,37 +40,28 @@ GitHub repository může být private.
 # Základní architektura
 
 ```text
-                  GitHub repository
-                  ┌───────────────┐
-                  │ words.csv     │
-                  │ sessions.csv  │
-                  │ reviews.csv   │
-                  │ TypeScript    │
-                  └───────┬───────┘
-                          │
-                    GitHub Actions
-                          │
-              ┌───────────┴───────────┐
-              │                       │
-         Claude API              Telegram API
-              │                       │
-              └───────────┬───────────┘
-                          │
-                        📱 User
-                          │
-                       response
-                          │
-                          ▼
-                    GitHub Action
-                          │
-                          ▼
-                      Claude API
-                          │
-                          ▼
-                       Telegram
+   GitHub repository            Cloudflare Worker
+   ┌─────────────────┐          ┌──────────────────────┐
+   │ data/chat_*.csv │◀────────▶│ webhook (odpovědi)   │
+   └─────────────────┘  Contents│ cron (3× denně)      │
+                            API │ KV: aktivní session  │
+                                └──────┬────────┬──────┘
+                                       │        │
+                                 Claude API   Telegram API
+                                                │
+                                              📱 User
 ```
 
-GitHub Actions bude sloužit jako jednoduchý orchestrátor. Nemá běžet permanentně.
+Všechna logika je ve Workeru: ptá se, hodnotí, počítá úrovně a zapisuje CSV
+přímo přes GitHub Contents API (`PUT` = změna souboru i commit v jednom
+volání). GitHub je čistě úložiště, žádné Actions.
+
+Zápis posílá celý soubor — Contents API nezná částečnou úpravu. Při několika
+stovkách slov jde o jednotky kilobajtů.
+
+Souběžný zápis hlídá `sha` blobu: při konfliktu vrátí GitHub 409 a odpověď se
+nezapíše (dostaneš chybovou hlášku a odpovíš znovu). Každý chat má vlastní
+soubor, takže nastat může jen při dvou odpovědích téhož člověka naráz.
 
 ---
 
@@ -191,9 +182,8 @@ Jeho role:
 
 Deterministická logika má být v TypeScriptu:
 
-* výběr due words
-* výpočet spaced repetition
-* změna `next_review`
+* výběr kandidátů do session
+* změna úrovně po odpovědi
 * práce se sessions
 * aktualizace CSV
 
@@ -332,12 +322,11 @@ Například strukturovaný výstup:
 }
 ```
 
-TypeScript následně:
+Worker následně:
 
-1. zapíše review do `reviews.csv`
-2. aktualizuje `words.csv`
-3. spočítá další `next_review`
-4. ukončí session
+1. posune úroveň procvičovaného směru
+2. zapíše CSV zpět na GitHub
+3. ukončí session a pošle report
 
 ---
 
@@ -349,71 +338,61 @@ Claude se nemá volat kvůli každému jednoduchému databázovému rozhodnutí.
 
 Claude se používá pouze tam, kde je potřeba AI:
 
-* vytvoření otázky
-* konverzace
 * vyhodnocení odpovědi
+* překlad a příklad při `/add`
+* konverzace (dialogový režim, zatím neimplementováno)
 
-CSV se zpracovává lokálně v GitHub Action.
+Flashcard otázka se **skládá v kódu** — má jeden tvar, takže by model jen
+přidával rozptyl a další volání.
+
+CSV zpracovává Worker; GitHub je jen úložiště.
 
 Při stovkách slov a několika interakcích denně by měl být API usage velmi malý.
 
 ---
 
-# GitHub Actions
+# Běhy Workeru
 
-GitHub Actions má řešit dvě hlavní situace.
+## Cron
 
-## Scheduled job
-
-Například několikrát denně:
+Třikrát denně (`0 6,11,17 * * *` UTC, tedy 8:00/13:00/19:00 letního času):
 
 ```text
-08:00
-13:00
-19:00
+pro každý chat v TELEGRAM_CHAT_IDS:
+  je otevřená session? → připomenout otevřenou otázku a skončit
+  ↓
+  načíst CSV z GitHubu
+  ↓
+  vybrat kandidáty (viz Učící algoritmus)
+  ↓
+  složit otázky, uložit session do KV
+  ↓
+  poslat první otázku
 ```
 
-Workflow:
+Připomínka otevřené otázky je důležitá: session se ukončí jen dokončením, takže
+bez ní by nedokončená session bota umlčela natrvalo.
+
+## Odpověď uživatele
 
 ```text
-load words.csv
+Telegram webhook
 ↓
-find words where next_review <= now
+ověřit secret_token a chat id
 ↓
-select appropriate word(s)
+načíst session z KV
 ↓
-create session
+Claude vyhodnotí odpověď
 ↓
-call Claude
+načíst CSV (+ sha) → applyLevel → PUT zpět na GitHub
 ↓
-send Telegram message
+poslat feedback
 ↓
-commit updated sessions.csv
+zbývá otázka? → poslat další; jinak smazat session a poslat report
 ```
 
-## Response handling
-
-Telegram bot musí nějakým způsobem předat uživatelovu odpověď zpět systému.
-
-Workflow následně:
-
-```text
-Telegram message
-↓
-identify active session
-↓
-load session + history
-↓
-call Claude
-↓
-generate next response
-↓
-send Telegram message
-↓
-update session
-↓
-commit changes
-```
+Zápis je záměrně **před** posunem session: kdyby selhal, otázka zůstane
+otevřená a odpověď se dá dát znovu, místo aby se tiše ztratila.
 
 Je potřeba navrhnout konkrétní mechanismus pro příjem Telegram zpráv. Preferujeme řešení bez permanentně běžícího serveru.
 

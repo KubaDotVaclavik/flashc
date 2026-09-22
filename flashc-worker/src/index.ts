@@ -9,7 +9,6 @@ const LEARNING_MAX = 5;
 
 type Direction = "en_cs" | "cs_en";
 
-/** Only the columns of words.csv this Worker reads; the repo owns the full row. */
 type Word = {
   id: string;
   word: string;
@@ -19,7 +18,21 @@ type Word = {
   level_cs_en: number;
   practiced_en_cs: string;
   practiced_cs_en: string;
+  topic: string;
 };
+
+/** The order columns are written in; also what a row is read back into. */
+const WORD_COLUMNS = [
+  "id",
+  "word",
+  "meaning",
+  "example",
+  "level_en_cs",
+  "level_cs_en",
+  "practiced_en_cs",
+  "practiced_cs_en",
+  "topic",
+] as const;
 
 type Candidate = {
   word: Word;
@@ -28,21 +41,7 @@ type Candidate = {
   practiced: string;
 };
 
-type AnswerPayload = {
-  chat_id: string;
-  word_id: string;
-  result: "good" | "bad";
-  direction: Direction;
-};
 
-type AddPayload = {
-  chat_id: string;
-  word: string;
-  meaning: string;
-  example: string;
-  start_level: number;
-  topic: string;
-};
 
 /** A subject area that steers how Claude explains a word. Configured in TOPICS. */
 type Topic = {
@@ -88,7 +87,7 @@ type ActiveSession = {
 };
 
 type Evaluation = {
-  result: AnswerPayload["result"];
+  result: "good" | "bad";
   feedback: string;
 };
 
@@ -492,6 +491,40 @@ async function startSession(
   );
 }
 
+/**
+ * Moves a word's level for the direction it was asked in and commits the file.
+ * Returns the vocabulary as written, so a caller need not read it back.
+ */
+async function recordAnswer(
+  question: Question,
+  result: Evaluation["result"],
+  chatId: string,
+  env: Env
+): Promise<Word[]> {
+  const { words, sha } = await readVocabulary(chatId, env);
+  const word = words.find((candidate) => candidate.id === question.word_id);
+
+  // The word can be gone if the row was deleted mid-session. Nothing to record,
+  // and the learner has already been given their feedback.
+  if (!word) {
+    console.warn(`Word ${question.word_id} is no longer in ${wordsPath(chatId)}.`);
+    return words;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const updated = applyLevel(word, question.direction, result, today);
+  const next = words.map((item) => (item.id === word.id ? updated : item));
+
+  await writeWords(
+    chatId,
+    next,
+    sha,
+    `Record ${result} for "${word.word}" (${question.direction})`,
+    env
+  );
+  return next;
+}
+
 async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<void> {
   const session = await env.SESSIONS.get<ActiveSession>(sessionKey(chatId), "json");
   const open = session?.questions[session.current];
@@ -506,15 +539,9 @@ async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<vo
 
   const evaluation = await evaluateAnswer(open, answer, env);
 
-  // Record the result before advancing the session: if the dispatch fails, the
-  // question stays open and the answer can be retried rather than silently lost.
-  const payload: AnswerPayload = {
-    chat_id: chatId,
-    word_id: open.word_id,
-    result: evaluation.result,
-    direction: open.direction,
-  };
-  await dispatch("flashc-answer", payload, env);
+  // Record the result before advancing the session: if the write fails, the
+  // question stays open and the answer can be given again rather than be lost.
+  const updated = await recordAnswer(open, evaluation.result, chatId, env);
 
   const next = session.current + 1;
   const done = next >= session.questions.length;
@@ -534,10 +561,9 @@ async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<vo
   await sendMessage(`${mark} ${evaluation.feedback}`, chatId, env);
 
   if (done) {
-    // The CSV still lacks this session's answers — the Action commits them a
-    // few seconds from now — so the report is one session behind. Close enough
-    // for a nudge about the size of each band.
-    await sendMessage(buildReport(await readWords(chatId, env), env), chatId, env);
+    // Counted from what was just written, so the report includes this session
+    // rather than trailing it.
+    await sendMessage(buildReport(updated, env), chatId, env);
   } else {
     await sendMessage(
       questionText(session.questions[next]!.question, next, session.questions.length),
@@ -570,8 +596,10 @@ async function addWord(
     return;
   }
 
-  const known = await readWords(chatId, env);
-  const duplicate = known.find(
+  // Read once and write against that same sha: checking for a duplicate with
+  // one read and writing after another would leave a gap for the two to differ.
+  const { words, sha } = await readVocabulary(chatId, env);
+  const duplicate = words.find(
     (item) => item.word.toLowerCase() === word.toLowerCase()
   );
   if (duplicate) {
@@ -585,15 +613,31 @@ async function addWord(
     return;
   }
 
-  const payload: AddPayload = {
-    chat_id: chatId,
-    word,
-    meaning: details.meaning,
-    example: details.example,
-    start_level: config(env, "START_LEVEL", 2),
-    topic: topic.key,
-  };
-  await dispatch("flashc-add", payload, env);
+  const startLevel = config(env, "START_LEVEL", 2);
+  const nextId = String(
+    Math.max(0, ...words.map((item) => Number(item.id) || 0)) + 1
+  );
+
+  await writeWords(
+    chatId,
+    [
+      ...words,
+      {
+        id: nextId,
+        word,
+        meaning: details.meaning,
+        example: details.example,
+        level_en_cs: startLevel,
+        level_cs_en: startLevel,
+        practiced_en_cs: "",
+        practiced_cs_en: "",
+        topic: topic.key,
+      },
+    ],
+    sha,
+    `Add "${word}"`,
+    env
+  );
   await sendMessage(
     `➕ ${bold(word)} — ${escapeHtml(details.meaning)}\n` +
       `<i>${escapeHtml(topic.label)}</i>\n\n` +
@@ -601,6 +645,35 @@ async function addWord(
     chatId,
     env
   );
+}
+
+/**
+ * How far a wrong answer knocks a word back. Learning (0-5) costs exactly one
+ * correct answer to repair; the higher bands cost more, so a word forgotten
+ * after weeks of silence drops back into daily practice rather than being
+ * re-confirmed by a single lucky answer.
+ */
+function penalty(level: number): number {
+  if (level >= MAX_LEVEL) return 3;
+  if (level >= 6) return 2;
+  return 1;
+}
+
+function applyLevel(
+  word: Word,
+  direction: Direction,
+  result: Evaluation["result"],
+  today: string
+): Word {
+  const level = levelOf(word, direction);
+  const next =
+    result === "good"
+      ? Math.min(MAX_LEVEL, level + 1)
+      : Math.max(0, level - penalty(level));
+
+  return direction === "en_cs"
+    ? { ...word, level_en_cs: next, practiced_en_cs: today }
+    : { ...word, level_cs_en: next, practiced_cs_en: today };
 }
 
 function levelOf(word: Word, direction: Direction): number {
@@ -702,64 +775,134 @@ export function buildReport(words: Word[], env: Env): string {
   return lines.join("\n");
 }
 
-async function readWords(chatId: string, env: Env): Promise<Word[]> {
+/** A vocabulary together with the blob sha a write of it must be checked against. */
+type Vocabulary = {
+  words: Word[];
+  /** Null when the chat has no file yet, which is how a create is requested. */
+  sha: string | null;
+};
+
+const githubHeaders = (env: Env) => ({
+  Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+  Accept: "application/vnd.github+json",
+  "User-Agent": "flashc-worker",
+});
+
+async function readVocabulary(chatId: string, env: Env): Promise<Vocabulary> {
   const path = wordsPath(chatId);
   const response = await fetch(
     `https://api.github.com/repos/${env.GITHUB_REPO}/contents/${path}`,
-    {
-      headers: {
-        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-        Accept: "application/vnd.github.raw+json",
-        "User-Agent": "flashc-worker",
-      },
-    }
+    { headers: githubHeaders(env) }
   );
 
   // A chat that has never added a word has no file yet. Only 404 means that —
   // a 401 or 500 must still throw, or a broken token would look like an empty
   // vocabulary and quietly reset someone's progress.
   if (response.status === 404) {
-    return [];
+    return { words: [], sha: null };
   }
 
   if (!response.ok) {
     throw new Error(`Reading ${path} failed: ${response.status} ${await response.text()}`);
   }
 
-  return parseCsv(await response.text()).map((row) => ({
-    id: row.id ?? "",
-    word: row.word ?? "",
-    meaning: row.meaning ?? "",
-    example: row.example ?? "",
-    level_en_cs: Number(row.level_en_cs) || 0,
-    level_cs_en: Number(row.level_cs_en) || 0,
-    practiced_en_cs: row.practiced_en_cs ?? "",
-    practiced_cs_en: row.practiced_cs_en ?? "",
-  }));
+  const body = (await response.json()) as { content?: string; sha?: string };
+  // GitHub wraps the base64 at 60 columns.
+  const text = decodeBase64((body.content ?? "").replace(/\s/g, ""));
+
+  return {
+    words: parseCsv(text).map((row) => ({
+      id: row.id ?? "",
+      word: row.word ?? "",
+      meaning: row.meaning ?? "",
+      example: row.example ?? "",
+      level_en_cs: Number(row.level_en_cs) || 0,
+      level_cs_en: Number(row.level_cs_en) || 0,
+      practiced_en_cs: row.practiced_en_cs ?? "",
+      practiced_cs_en: row.practiced_cs_en ?? "",
+      topic: row.topic ?? "",
+    })),
+    sha: body.sha ?? null,
+  };
 }
 
-async function dispatch(
-  eventType: string,
-  payload: AnswerPayload | AddPayload,
+async function readWords(chatId: string, env: Env): Promise<Word[]> {
+  return (await readVocabulary(chatId, env)).words;
+}
+
+/**
+ * Replaces the chat's CSV and commits it in one call. The Contents API has no
+ * partial update, so the whole file goes every time; at a few hundred words
+ * that is a handful of kilobytes.
+ */
+async function writeWords(
+  chatId: string,
+  words: Word[],
+  sha: string | null,
+  message: string,
   env: Env
 ): Promise<void> {
+  const path = wordsPath(chatId);
   const response = await fetch(
-    `https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`,
+    `https://api.github.com/repos/${env.GITHUB_REPO}/contents/${path}`,
     {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": "flashc-worker",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ event_type: eventType, client_payload: payload }),
+      method: "PUT",
+      headers: { ...githubHeaders(env), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message,
+        content: encodeBase64(toCsv(words)),
+        // Sending no sha asks GitHub to create the file, and it refuses if one
+        // already exists — so a first write can never clobber a vocabulary.
+        ...(sha ? { sha } : {}),
+      }),
     }
   );
 
-  if (!response.ok) {
-    throw new Error(`GitHub dispatch failed: ${response.status} ${await response.text()}`);
+  if (response.ok) return;
+
+  // 409 means the file moved on since it was read. Each chat writes only its
+  // own file, so this needs the same person answering twice within the same
+  // moment; the error surfaces and the answer can be given again.
+  if (response.status === 409 || response.status === 422) {
+    throw new Error(
+      `${path} changed while it was being updated — the answer was not recorded.`
+    );
   }
+
+  throw new Error(`Writing ${path} failed: ${response.status} ${await response.text()}`);
+}
+
+function toCsv(words: Word[]): string {
+  const rows = words.map((word) =>
+    WORD_COLUMNS.map((column) => csvField(word[column])).join(",")
+  );
+  return [WORD_COLUMNS.join(","), ...rows].join("\n") + "\n";
+}
+
+function csvField(value: string | number): string {
+  // The reader splits rows on newlines, so a field may not contain one; Claude
+  // writes the example sentences and nothing stops it using a line break.
+  const text = String(value).replace(/\r?\n/g, " ").trim();
+  return /[",]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/** btoa alone mangles anything non-ASCII, so the text becomes UTF-8 bytes first. */
+function encodeBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  // In chunks: spreading a whole file into fromCharCode overflows the stack.
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function decodeBase64(base64: string): string {
+  if (!base64) return "";
+  const binary = atob(base64);
+  return new TextDecoder().decode(
+    Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  );
 }
 
 /**
