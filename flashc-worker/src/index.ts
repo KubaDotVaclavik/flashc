@@ -79,6 +79,8 @@ type Question = {
   meaning: string;
   direction: Direction;
   question: string;
+  /** Optional: sessions parked in KV before this field existed have no topic. */
+  topic?: string;
 };
 
 type ActiveSession = {
@@ -478,6 +480,7 @@ async function startSession(
       meaning: candidate.word.meaning,
       direction: candidate.direction,
       question: askQuestion(candidate.word, candidate.direction),
+      topic: candidate.word.topic,
     });
   }
 
@@ -1154,6 +1157,21 @@ function evaluateAnswer(
       ? "The learner should give the Czech meaning."
       : "The learner should give the English word.";
 
+  // Only when producing English: having just recalled the word is the moment
+  // a synonym or a collocation sticks. Going the other way the learner is
+  // recalling Czech they already have, so the extra English would be noise.
+  const topic = topics(env).find((candidate) => candidate.key === question.topic);
+  const enrichment =
+    question.direction === "cs_en"
+      ? "When the answer is correct, use that sentence to teach something " +
+        "further about the English word: a synonym, a common collocation or " +
+        "fixed phrase, or a short natural sentence using it — whichever suits " +
+        "the word best. Keep it to one line. " +
+        (topic
+          ? `Pitch it for this learner: ${topic.instruction} `
+          : "")
+      : "When the answer is correct, confirm it in a few words. ";
+
   return callClaude<Evaluation>(
     {
       model: "fast",
@@ -1175,10 +1193,11 @@ function evaluateAnswer(
         // A fixed shape, so the feedback reads the same every time instead of
         // being reinvented per answer.
         "Write the feedback in English as one line, in exactly this shape: " +
-        "the correct answer first, in bold, then an em dash, then at most one " +
-        "short sentence. For a correct answer that sentence is optional; for a " +
-        "wrong one, say briefly what was wrong. " +
+        "the correct answer first, in bold, then an em dash, then one short " +
+        "sentence. " +
+        "When the answer is wrong, that sentence says briefly what was wrong. " +
         "Example: <b>subtle</b> — you wrote the opposite. " +
+        enrichment +
         // Telegram parses this as HTML and refuses the whole message if the
         // markup is malformed, so the rules are spelled out rather than assumed.
         "Use Telegram HTML: only <b>, <i> and <code>, each properly closed. " +
@@ -1207,9 +1226,16 @@ function evaluateAnswer(
         const hit = strip(expected)
           .split(/[;,]/)
           .some((variant) => strip(answer).includes(variant.trim()));
-        return hit
-          ? { result: "good", feedback: `${bold(expected)} — [stub] correct.` }
-          : { result: "bad", feedback: `${bold(expected)} — [stub] not what you wrote.` };
+        if (!hit) {
+          return { result: "bad", feedback: `${bold(expected)} — [stub] not what you wrote.` };
+        }
+        return {
+          result: "good",
+          feedback:
+            question.direction === "cs_en"
+              ? `${bold(expected)} — [stub] also said as "[stub] synonym".`
+              : `${bold(expected)} — [stub] correct.`,
+        };
       },
     },
     env
