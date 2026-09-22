@@ -3,5 +3,5 @@ id,word,meaning,example,level_en_cs,level_cs_en,practiced_en_cs,practiced_cs_en,
 2,subtle,jemný; nepatrný,There is a subtle difference.,3,1,2026-09-22,2026-09-21,general
 3,intent,"úmysl, záměr",The API call failed because the intent parameter was missing from the request.,3,4,2026-09-22,2026-09-21,it
 4,accuracy,přesnost,"After tuning the hyperparameters, the model's accuracy on the test dataset improved to 95%.",3,4,2026-09-21,2026-09-21,it
-5,intentional,"úmyslný, záměrný",The developer added an intentional delay to the API response to test the loading spinner.,3,3,2026-09-21,2026-09-21,it
+5,intentional,"úmyslný, záměrný",The developer added an intentional delay to the API response to test the loading spinner.,4,3,2026-09-22,2026-09-21,it
 6,address an issue,vyřešit problém,The team worked overtime to address an issue in the payment processing system.,2,3,,2026-09-22,it
