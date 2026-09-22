@@ -1,5 +1,5 @@
 id,word,meaning,example,level_en_cs,level_cs_en,practiced_en_cs,practiced_cs_en,topic
-1,reluctant,neochotný,I was reluctant to accept the offer.,5,5,2026-09-22,2026-09-22,general
+1,reluctant,neochotný,I was reluctant to accept the offer.,6,5,2026-09-22,2026-09-22,general
 2,subtle,jemný; nepatrný,There is a subtle difference.,3,3,2026-09-22,2026-09-22,general
 3,intent,"úmysl, záměr",The API call failed because the intent parameter was missing from the request.,6,3,2026-09-22,2026-09-22,it
 4,accuracy,přesnost,"After tuning the hyperparameters, the model's accuracy on the test dataset improved to 95%.",4,5,2026-09-22,2026-09-22,it
