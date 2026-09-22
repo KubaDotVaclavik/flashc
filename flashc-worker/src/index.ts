@@ -260,7 +260,7 @@ export default {
     ctx.waitUntil(
       Promise.all(
         allowedChats(env).map((chatId) =>
-          guard(startSession(false, chatId, env), chatId, env)
+          guard(startSession("cron", chatId, env), chatId, env)
         )
       )
     );
@@ -309,7 +309,7 @@ async function handleMessage(
   } else if (text.startsWith("/add ")) {
     await askForTopic(text.slice(4).trim(), chatId, env);
   } else if (text === "/session") {
-    await startSession(true, chatId, env);
+    await startSession("command", chatId, env);
   } else {
     await gradeAnswer(text, chatId, env);
   }
@@ -430,22 +430,23 @@ function questionText(question: string, index: number, total: number): string {
 }
 
 async function startSession(
-  announceIdle: boolean,
+  trigger: "cron" | "command",
   chatId: string,
   env: Env
 ): Promise<void> {
   const active = await env.SESSIONS.get<ActiveSession>(sessionKey(chatId), "json");
   if (active) {
-    if (announceIdle) {
-      const open = active.questions[active.current];
-      if (open) {
-        await sendMessage(
-          "You still have an open question:\n\n" +
-            questionText(open.question, active.current, active.questions.length),
-          chatId,
-          env
-        );
-      }
+    // A session has no other way to end than being finished, so an abandoned
+    // one used to silence the bot for good: every later cron found it open and
+    // said nothing. Repeating the question is what keeps that from happening.
+    const open = active.questions[active.current];
+    if (open) {
+      await sendMessage(
+        "You still have an open question:\n\n" +
+          questionText(open.question, active.current, active.questions.length),
+        chatId,
+        env
+      );
     }
     return;
   }
@@ -456,7 +457,7 @@ async function startSession(
     // On a schedule this would repeat at every cron tick, so the reminder is
     // capped at one a day. Asking directly always gets an answer.
     const today = new Date().toISOString().slice(0, 10);
-    if (!announceIdle && (await env.SESSIONS.get(idleKey(chatId))) === today) {
+    if (trigger === "cron" && (await env.SESSIONS.get(idleKey(chatId))) === today) {
       return;
     }
     await env.SESSIONS.put(idleKey(chatId), today);
