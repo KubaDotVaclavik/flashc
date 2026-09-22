@@ -4,7 +4,7 @@ id,word,meaning,example,level_en_cs,level_cs_en,practiced_en_cs,practiced_cs_en,
 3,intent,"úmysl, záměr",The API call failed because the intent parameter was missing from the request.,6,3,2026-09-22,2026-09-22,it
 4,accuracy,přesnost,"After tuning the hyperparameters, the model's accuracy on the test dataset improved to 95%.",4,5,2026-09-22,2026-09-22,it
 5,intentional,"úmyslný, záměrný",The developer added an intentional delay to the API response to test the loading spinner.,5,5,2026-09-22,2026-09-22,it
-6,address an issue,vyřešit problém,The team worked overtime to address an issue in the payment processing system.,3,4,2026-09-22,2026-09-22,it
+6,address an issue,vyřešit problém,The team worked overtime to address an issue in the payment processing system.,3,5,2026-09-22,2026-09-22,it
 7,assumption,předpoklad,The bug was caused by an incorrect assumption about the input data format.,3,2,2026-09-22,,it
 8,concern,obava,The developer raised a concern about the security of the new API endpoint.,1,2,2026-09-22,,it
 9,facilitate,"usnadnit, umožnit",The new API was designed to facilitate communication between microservices.,2,2,,,it
