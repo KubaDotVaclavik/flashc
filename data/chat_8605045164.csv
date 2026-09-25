@@ -7,4 +7,4 @@ id,word,meaning,example,level_en_cs,level_cs_en,practiced_en_cs,practiced_cs_en,
 6,address an issue,vyřešit problém,The team worked overtime to address an issue in the payment processing system.,6,6,2026-09-23,2026-09-22,it
 7,assumption,předpoklad,The bug was caused by an incorrect assumption about the input data format.,6,4,2026-09-24,2026-09-24,it
 8,concern,"obava, zájem",The developer raised a concern about the security of the new API endpoint.,1,6,2026-09-24,2026-09-24,it
-9,facilitate,"usnadnit, umožnit",The new API was designed to facilitate communication between microservices.,2,3,2026-09-24,2026-09-24,it
+9,facilitate,"usnadnit, umožnit",The new API was designed to facilitate communication between microservices.,3,3,2026-09-25,2026-09-24,it
