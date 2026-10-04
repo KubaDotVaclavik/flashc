@@ -83,15 +83,42 @@ type Question = {
   topic?: string;
 };
 
-type ActiveSession = {
+type FlashcardSession = {
+  mode?: "flashcard";
   questions: Question[];
   current: number;
 };
+
+type ClaudeMessage = { role: "user" | "assistant"; content: string };
+
+type DialogSession = {
+  mode: "dialog";
+  question: Question;
+  answeredTurns: number;
+  messages: ClaudeMessage[];
+  currentPrompt: string;
+};
+
+type ActiveSession = FlashcardSession | DialogSession;
+
+function isDialogSession(session: ActiveSession): session is DialogSession {
+  return session.mode === "dialog";
+}
 
 type Evaluation = {
   result: "good" | "bad";
   feedback: string;
 };
+
+type DialogEvaluation = {
+  result: "good" | "bad";
+  vocabularyNote: string;
+  grammar: { original: string; suggestion: string; severity: "minor" | "major" }[];
+  fluency: "poor" | "fair" | "good";
+};
+
+const DIALOG_START_MESSAGE =
+  "Start a short, natural English conversation with one question that gives the learner an opportunity to use the target vocabulary.";
 
 type WordDetails = {
   /** Empty when the input is not a word Claude recognises in either language. */
@@ -311,8 +338,10 @@ async function handleMessage(
     await askForTopic(text.slice(4).trim(), chatId, env);
   } else if (text === "/session") {
     await startSession("command", chatId, env);
+  } else if (text === "/dialog") {
+    await startDialogSession(chatId, env);
   } else {
-    await gradeAnswer(text, chatId, env);
+    await handlePracticeReply(text, chatId, env);
   }
 }
 
@@ -437,18 +466,7 @@ async function startSession(
 ): Promise<void> {
   const active = await env.SESSIONS.get<ActiveSession>(sessionKey(chatId), "json");
   if (active) {
-    // A session has no other way to end than being finished, so an abandoned
-    // one used to silence the bot for good: every later cron found it open and
-    // said nothing. Repeating the question is what keeps that from happening.
-    const open = active.questions[active.current];
-    if (open) {
-      await sendMessage(
-        "You still have an open question:\n\n" +
-          questionText(open.question, active.current, active.questions.length),
-        chatId,
-        env
-      );
-    }
+    await remindActiveSession(active, chatId, env);
     return;
   }
 
@@ -494,6 +512,149 @@ async function startSession(
   );
 }
 
+async function remindActiveSession(
+  active: ActiveSession,
+  chatId: string,
+  env: Env
+): Promise<void> {
+  if (isDialogSession(active)) {
+    await sendMessage(
+      "You still have an open dialog:\n\n" + escapeHtml(active.currentPrompt),
+      chatId,
+      env
+    );
+    return;
+  }
+
+  const open = active.questions[active.current];
+  if (open) {
+    await sendMessage(
+      "You still have an open question:\n\n" +
+        questionText(open.question, active.current, active.questions.length),
+      chatId,
+      env
+    );
+  }
+}
+
+async function startDialogSession(chatId: string, env: Env): Promise<void> {
+  const active = await env.SESSIONS.get<ActiveSession>(sessionKey(chatId), "json");
+  if (active) {
+    await remindActiveSession(active, chatId, env);
+    return;
+  }
+
+  const words = await readWords(chatId, env);
+  const candidate = selectCandidates(words, env, "cs_en")[0];
+  if (!candidate) {
+    await sendMessage(
+      words.length === 0
+        ? `You have no words yet. Add your first one with ${ADD_USAGE}.`
+        : "No English-production word is due for a dialog right now. Try /session for flashcards.",
+      chatId,
+      env
+    );
+    return;
+  }
+
+  const question: Question = {
+    word_id: candidate.word.id,
+    word: candidate.word.word,
+    meaning: candidate.word.meaning,
+    direction: candidate.direction,
+    question: "Use the target word naturally in an English conversation.",
+    topic: candidate.word.topic,
+  };
+  const currentPrompt = await generateDialogTurn(question, [], 0, env);
+  const session: DialogSession = {
+    mode: "dialog",
+    question,
+    answeredTurns: 0,
+    messages: [
+      { role: "user", content: DIALOG_START_MESSAGE },
+      { role: "assistant", content: currentPrompt },
+    ],
+    currentPrompt,
+  };
+  await env.SESSIONS.put(sessionKey(chatId), JSON.stringify(session));
+  await sendMessage(`💬 ${escapeHtml(currentPrompt)}`, chatId, env);
+}
+
+async function handlePracticeReply(
+  answer: string,
+  chatId: string,
+  env: Env
+): Promise<void> {
+  const active = await env.SESSIONS.get<ActiveSession>(sessionKey(chatId), "json");
+  if (active && isDialogSession(active)) {
+    await handleDialogReply(active, answer, chatId, env);
+  } else {
+    await gradeAnswer(answer, chatId, env);
+  }
+}
+
+async function handleDialogReply(
+  session: DialogSession,
+  answer: string,
+  chatId: string,
+  env: Env
+): Promise<void> {
+  const messages: ClaudeMessage[] = [
+    ...session.messages,
+    { role: "user", content: answer },
+  ];
+  const answeredTurns = session.answeredTurns + 1;
+
+  if (answeredTurns < 5) {
+    const currentPrompt = await generateDialogTurn(
+      session.question,
+      messages,
+      answeredTurns,
+      env
+    );
+    await env.SESSIONS.put(
+      sessionKey(chatId),
+      JSON.stringify({
+        ...session,
+        messages: [...messages, { role: "assistant", content: currentPrompt }],
+        answeredTurns,
+        currentPrompt,
+      })
+    );
+    await sendMessage(`💬 ${escapeHtml(currentPrompt)}`, chatId, env);
+    return;
+  }
+
+  const evaluation = await evaluateDialog(session.question, messages, env);
+  const updated = await recordAnswer(
+    session.question,
+    evaluation.result,
+    chatId,
+    env
+  );
+  await env.SESSIONS.delete(sessionKey(chatId));
+
+  const mark = evaluation.result === "good" ? "✅" : "❌";
+  const grammar = evaluation.grammar.length
+    ? "\n\n" +
+      evaluation.grammar
+        .map(
+          (item) =>
+            `${item.severity === "major" ? "Correction" : "Suggestion"}: ` +
+            `“${escapeHtml(item.original)}” → “${escapeHtml(item.suggestion)}”`
+        )
+        .join("\n")
+    : "";
+  await sendMessage(
+    `${mark} Dialog complete for <b>${escapeHtml(session.question.word)}</b>.\n` +
+      `Vocabulary: ${escapeHtml(evaluation.vocabularyNote)}\n` +
+      `Fluency: ${escapeHtml(evaluation.fluency)}${grammar}`,
+    chatId,
+    env
+  );
+  await sendMessage(buildReport(updated, env), chatId, env);
+}
+
 /**
  * Moves a word's level for the direction it was asked in and commits the file.
  * Returns the vocabulary as written, so a caller need not read it back.
@@ -530,6 +691,14 @@ async function recordAnswer(
 
 async function gradeAnswer(answer: string, chatId: string, env: Env): Promise<void> {
   const session = await env.SESSIONS.get<ActiveSession>(sessionKey(chatId), "json");
+  if (session && isDialogSession(session)) {
+    await sendMessage(
+      "This is an open dialog. Reply to its current prompt before starting flashcards.",
+      chatId,
+      env
+    );
+    return;
+  }
   const open = session?.questions[session.current];
   if (!session || !open) {
     await sendMessage(
@@ -700,15 +869,20 @@ function cooldownFor(level: number, env: Env): number {
   return config(env, "COOLDOWN_6", 5);
 }
 
-export function selectCandidates(words: Word[], env: Env): Candidate[] {
+export function selectCandidates(
+  words: Word[],
+  env: Env,
+  direction?: Direction
+): Candidate[] {
   const all: Candidate[] = [];
   for (const word of words) {
-    for (const direction of ["en_cs", "cs_en"] as const) {
+    for (const candidateDirection of ["en_cs", "cs_en"] as const) {
+      if (direction && candidateDirection !== direction) continue;
       all.push({
         word,
-        direction,
-        level: levelOf(word, direction),
-        practiced: practicedOf(word, direction),
+        direction: candidateDirection,
+        level: levelOf(word, candidateDirection),
+        practiced: practicedOf(word, candidateDirection),
       });
     }
   }
@@ -1058,7 +1232,9 @@ async function sendMessage(
 
 type ClaudeCall<T> = {
   system: string;
-  user: string;
+  user?: string;
+  messages?: ClaudeMessage[];
+  maxTokens?: number;
   schema?: Record<string, unknown>;
   /**
    * Asking and grading are small, mechanical jobs and go to the cheap model;
@@ -1070,7 +1246,7 @@ type ClaudeCall<T> = {
 };
 
 async function callClaude<T>(
-  { system, user, schema, model, stub }: ClaudeCall<T>,
+  { system, user, messages, maxTokens, schema, model, stub }: ClaudeCall<T>,
   env: Env
 ): Promise<T> {
   if (!env.ANTHROPIC_API_KEY) {
@@ -1103,16 +1279,14 @@ async function callClaude<T>(
     },
     body: JSON.stringify({
       model: modelId,
-      // Replies here are a question, a sentence of feedback, or a short JSON
-      // object — a few dozen tokens. The old 1000 was never approached.
-      max_tokens: 300,
+      max_tokens: maxTokens ?? 300,
       // Asking a question on Haiku leaves nothing to configure, and an empty
       // object is not worth sending.
       ...(Object.keys(outputConfig).length > 0
         ? { output_config: outputConfig }
         : {}),
       system,
-      messages: [{ role: "user", content: user }],
+      messages: messages ?? [{ role: "user", content: user ?? "" }],
     }),
   });
 
@@ -1147,6 +1321,42 @@ function askQuestion(word: Word, direction: Direction): string {
   const [primary = word.meaning] = word.meaning.split(/[;,]/);
   return `Which English word means ${bold(primary.trim())}?`;
 }
+
+function generateDialogTurn(
+  question: Question,
+  messages: ClaudeMessage[],
+  answeredTurns: number,
+  env: Env
+): Promise<string> {
+  const topic = topics(env).find((candidate) => candidate.key === question.topic);
+  return callClaude<string>(
+    {
+      model: "fast",
+      maxTokens: 250,
+      system:
+        "You are a friendly English conversation partner for a Czech learner. " +
+        `The target English word is ${question.word}, meaning ${question.meaning}. ` +
+        "Hold a genuinely interactive conversation and respond to the learner's latest message. " +
+        "Do not reveal, quote, define, or use the target word yourself; create a natural context " +
+        "where the learner might choose to use it. Ask exactly one concise follow-up question. " +
+        "Do not correct grammar during the conversation; a brief review comes at the end. " +
+        (topic ? `Conversation context: ${topic.instruction} ` : "") +
+        "Return only the message to send, as plain text with no markup.",
+      user:
+        `The learner has answered ${answeredTurns} of 5 questions so far. ` +
+        (messages.length === 0
+          ? DIALOG_START_MESSAGE
+          : "Reply to the learner's latest message and invite the next response."),
+      ...(messages.length > 0 ? { messages } : {}),
+      stub: () =>
+        messages.length === 0
+          ? "Your team is trying a new tool at work. How do you feel about using it?"
+          : "That makes sense. What would help you feel more comfortable with it?",
+    },
+    env
+  );
+}
+
 function evaluateAnswer(
   question: Question,
   answer: string,
@@ -1235,6 +1445,71 @@ function evaluateAnswer(
             question.direction === "cs_en"
               ? `${bold(expected)} — [stub] also said as "[stub] synonym".`
               : `${bold(expected)} — [stub] correct.`,
+        };
+      },
+    },
+    env
+  );
+}
+
+function evaluateDialog(
+  question: Question,
+  messages: ClaudeMessage[],
+  env: Env
+): Promise<DialogEvaluation> {
+  return callClaude<DialogEvaluation>(
+    {
+      model: "fast",
+      maxTokens: 700,
+      system:
+        `Assess a five-reply English conversation by a Czech learner. Target word: ${question.word}. ` +
+        `Meaning: ${question.meaning}. ` +
+        "The learner must use the target English word correctly in at least one of their replies " +
+        "for result 'good'; otherwise result is 'bad'. Judge use by meaning and context, not just " +
+        "spelling or a matching substring. Also assess the learner's grammar and overall fluency. " +
+        "List only useful, specific grammar corrections; do not penalize informal but natural English. " +
+        "Write vocabularyNote as one concise sentence. Keep grammar suggestions concise.",
+      messages: [
+        { role: "user", content: DIALOG_START_MESSAGE },
+        ...messages.slice(1),
+      ],
+      schema: {
+        type: "object",
+        properties: {
+          result: { type: "string", enum: ["good", "bad"] },
+          vocabularyNote: { type: "string" },
+          grammar: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                original: { type: "string" },
+                suggestion: { type: "string" },
+                severity: { type: "string", enum: ["minor", "major"] },
+              },
+              required: ["original", "suggestion", "severity"],
+              additionalProperties: false,
+            },
+          },
+          fluency: { type: "string", enum: ["poor", "fair", "good"] },
+        },
+        required: ["result", "vocabularyNote", "grammar", "fluency"],
+        additionalProperties: false,
+      },
+      stub: () => {
+        const learnerText = messages
+          .filter((message) => message.role === "user")
+          .map((message) => message.content)
+          .join(" ")
+          .toLowerCase();
+        const usedTarget = learnerText.includes(question.word.toLowerCase());
+        return {
+          result: usedTarget ? "good" : "bad",
+          vocabularyNote: usedTarget
+            ? "The target word appeared in your conversation."
+            : `Try to use “${question.word}” in a future conversation.`,
+          grammar: [],
+          fluency: "fair",
         };
       },
     },
