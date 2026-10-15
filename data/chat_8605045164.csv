@@ -9,3 +9,4 @@ id,word,meaning,example,level_en_cs,level_cs_en,practiced_en_cs,practiced_cs_en,
 8,concern,"obava, zájem",The developer raised a concern about the security of the new API endpoint.,6,7,2026-10-06,2026-10-03,it
 9,facilitate,"usnadnit, umožnit",The new API was designed to facilitate communication between microservices.,5,6,2026-10-06,2026-10-03,it
 10,unattended,"bez dozoru, bez obsluhy",The script can run unattended on the server overnight to perform backups.,2,2,,,it
+11,now that,"teď když, vzhledem k tomu, že","Now that you're here, we can start the meeting.",2,2,,,general
